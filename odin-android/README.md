@@ -18,8 +18,10 @@ construit l'APK, publié dans la release **`odin-apk`** de ce dépôt.
    - `odin.ini` et `odin.log` y sont écrits.
    Sans l'autorisation, Odin utilise `Android/data/org.odinport.android/files`.
 
-Il faut un téléphone ARM64. Odin dessine avec Vulkan (1.3, avec *dynamic
-rendering*) et passe à OpenGL ES 3.2 si Vulkan ne convient pas. L'émulation
+Il faut un téléphone ARM64. Odin dessine par défaut avec OpenGL ES 3.2 :
+les polygones transparents y sont « épelés » (depth peeling), bien plus
+rapide sur une puce de téléphone que les listes de fragments des PC
+(`ODIN_GL_LISTS=1` les remet). Vulkan reste au choix, page Display. L'émulation
 Hikaru est lourde : un téléphone haut de gamme récent est conseillé.
 
 ## Commandes
