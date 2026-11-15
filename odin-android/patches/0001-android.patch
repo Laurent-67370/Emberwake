@@ -1246,11 +1246,132 @@ index 91fa8e4..ffc1660 100644
  }
  
  } /* namespace odin */
+diff --git a/src/odin/host/renderer/hikaru/vk/drawing_vk.hpp b/src/odin/host/renderer/hikaru/vk/drawing_vk.hpp
+index 2c8c5a7..b258e55 100644
+--- a/src/odin/host/renderer/hikaru/vk/drawing_vk.hpp
++++ b/src/odin/host/renderer/hikaru/vk/drawing_vk.hpp
+@@ -276,6 +276,12 @@ private:
+ 	SceneDebug m_debug{};
+ 	vk::Slice m_vertices{}, m_indices{}, m_views{}, m_lightsets{};
+ 	VkDescriptorSet m_list_set = VK_NULL_HANDLE;
++	/* Android: the buffers of the list copied into memory of the card
++	 * alone, a part for each frame in flight (scene_vk.cpp, to_card) */
++	vk::Buffer m_on_card[vk::Context::FRAMES]{};
++	VkDeviceSize m_on_card_used[vk::Context::FRAMES]{};
++	unsigned m_on_card_frame = ~0u;
++	vk::Slice to_card(const vk::Slice &from, VkDeviceSize size, VkDeviceSize align);
+ 	uint32_t m_identity = 0;	/* the modelview of none */
+ 	std::vector<bool> m_view_written, m_lightset_written;
+ 	VkPipeline m_bound_pipeline = VK_NULL_HANDLE;
+diff --git a/src/odin/host/renderer/hikaru/vk/pictures_vk.cpp b/src/odin/host/renderer/hikaru/vk/pictures_vk.cpp
+index a5b195c..a066dee 100644
+--- a/src/odin/host/renderer/hikaru/vk/pictures_vk.cpp
++++ b/src/odin/host/renderer/hikaru/vk/pictures_vk.cpp
+@@ -94,6 +94,9 @@ VkDrawing::~VkDrawing()
+ 	destroy_meshes();
+ 	destroy_lists();
+ 	m_fn.vkDestroyQueryPool(m_card.device(), m_stamps, nullptr);
++	for (vk::Buffer &buffer : m_on_card)
++		if (buffer.buffer)
++			m_card.destroy_buffer(buffer);
+ 	for (vk::Image *image : { &m_state, &m_none, &m_layers[0], &m_layers[1] })
+ 		m_card.destroy_image(*image);
+ 	for (vk::Pass *pass : { &m_blender, &m_compose, &m_presenter })
 diff --git a/src/odin/host/renderer/hikaru/vk/scene_vk.cpp b/src/odin/host/renderer/hikaru/vk/scene_vk.cpp
-index 81bdb45..1fd43cc 100644
+index 81bdb45..0ada786 100644
 --- a/src/odin/host/renderer/hikaru/vk/scene_vk.cpp
 +++ b/src/odin/host/renderer/hikaru/vk/scene_vk.cpp
-@@ -601,6 +601,7 @@ VkDrawing::open_scene(bool clear, bool clear_depth)
+@@ -43,6 +43,7 @@
+ #include <cstddef>
+ #include <cstdio>
+ #include <cstring>
++#include <utility>
+ #include <filesystem>
+ 
+ namespace odin {
+@@ -513,6 +514,39 @@ VkDrawing::prepare_program(uint64_t key)
+ 	m_preparing = false;
+ }
+ 
++/* A copy of that part of a staging buffer in memory of the card alone, in
++ * the part of the frame being written (the copy runs before the draws,
++ * which read it after a barrier); a larger buffer when it is full, the
++ * one before kept until the frames that used it are done */
++vk::Slice
++VkDrawing::to_card(const vk::Slice &from, VkDeviceSize size, VkDeviceSize align)
++{
++	const unsigned frame = m_card.frame();
++	vk::Buffer &buffer = m_on_card[frame];
++	VkDeviceSize &used = m_on_card_used[frame];
++
++	if (m_on_card_frame != frame) {
++		m_on_card_frame = frame;
++		used = 0;
++	}
++	VkDeviceSize at = (used + align - 1) / align * align;
++	if (!buffer.buffer || at + size > buffer.size) {
++		if (buffer.buffer) {
++			vk::Buffer old = buffer;
++			m_card.later([&card = m_card, old]() mutable { card.destroy_buffer(old); });
++		}
++		buffer = m_card.make_card_buffer(std::max<VkDeviceSize>((at + size) * 2, VkDeviceSize{8} << 20),
++		                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
++		                                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
++		                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
++		at = 0;
++	}
++	used = at + size;
++	const VkBufferCopy copy{ from.offset, at, size };
++	m_fn.vkCmdCopyBuffer(m_card.commands(), from.buffer, buffer.buffer, 1, &copy);
++	return { buffer.buffer, at, nullptr };
++}
++
+ /* The vertices and the indices of the list, its modelviews and the one of
+  * none after them; room for its views and lightsets, written when first
+  * used; the scene and its depth emptied, as scene_gl.cpp does: an
+@@ -545,10 +579,38 @@ VkDrawing::begin_scene(const odin_display_list_t &list, const SceneDebug &debug)
+ 	m_view_written.assign(list.num_vps, false);
+ 	m_lightset_written.assign(list.num_lss, false);
+ 
++	vk::Slice views = m_views, modelviews = mvs, lightsets = m_lightsets;
++#if defined(__ANDROID__)
++	/* A phone's card reads the processor's memory through the coherence
++	 * of its caches (Adreno has no memory both mapped and uncached): at
++	 * every draw the views, modelviews and lights each mesh starts with
++	 * cost it some 40 us. The views and lightsets are written all at once
++	 * here, and the buffers of the list copied into memory of the card
++	 * alone, which the draws read. */
++	static bool told = false;
++	if (!std::exchange(told, true))
++		std::printf("vulkan: the buffers of the lists copied into memory of the card alone\n");
++	for (unsigned i = 0; i < list.num_vps; i++)
++		write_view(i);
++	for (unsigned i = 0; i < list.num_lss; i++)
++		write_lightset(i);
++	close_scene();
++	m_vertices = to_card(m_vertices, vertex_bytes, 16);
++	m_indices = to_card(m_indices, index_bytes, 16);
++	modelviews = to_card(mvs, mv_bytes, align);
++	views = to_card(m_views, view_bytes, align);
++	lightsets = to_card(m_lightsets, ls_bytes, align);
++	m_card.memory_barrier(m_card.commands(), VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
++	                      VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
++	                              VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
++	                      VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT |
++	                              VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
++#endif
++
+ 	m_list_set = m_card.frame_set(m_list_layout);
+-	const VkDescriptorBufferInfo buffers[3] = { { m_views.buffer, m_views.offset, view_bytes },
+-		                                    { mvs.buffer, mvs.offset, mv_bytes },
+-		                                    { m_lightsets.buffer, m_lightsets.offset, ls_bytes } };
++	const VkDescriptorBufferInfo buffers[3] = { { views.buffer, views.offset, view_bytes },
++		                                    { modelviews.buffer, modelviews.offset, mv_bytes },
++		                                    { lightsets.buffer, lightsets.offset, ls_bytes } };
+ 	VkWriteDescriptorSet writes[3];
+ 	for (uint32_t i = 0; i < 3; i++)
+ 		writes[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_list_set, i, 0, 1,
+@@ -601,6 +663,7 @@ VkDrawing::open_scene(bool clear, bool clear_depth)
  	                                 nullptr };
  
  	m_fn.vkCmdBeginRendering(cb, &rendering);
@@ -1258,7 +1379,7 @@ index 81bdb45..1fd43cc 100644
  	set_scene_state(cb, m_collecting ? m_collect_set : VK_NULL_HANDLE);
  	m_family = NO_FAMILY;
  }
-@@ -636,6 +637,7 @@ VkDrawing::open_family(unsigned family)
+@@ -636,6 +699,7 @@ VkDrawing::open_family(unsigned family)
  	                                 nullptr };
  
  	m_fn.vkCmdBeginRendering(cb, &rendering);
@@ -1266,7 +1387,7 @@ index 81bdb45..1fd43cc 100644
  	set_scene_state(cb, m_family_set[family]);
  	m_family = family;
  }
-@@ -904,6 +906,7 @@ VkDrawing::draw_mesh(const odin_mesh_t &mesh, const MeshDraw &draw)
+@@ -904,6 +968,7 @@ VkDrawing::draw_mesh(const odin_mesh_t &mesh, const MeshDraw &draw)
  	if (p != m_bound_pipeline) {
  		m_bound_pipeline = p;
  		m_fn.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
@@ -1274,7 +1395,7 @@ index 81bdb45..1fd43cc 100644
  	}
  	set_view(mesh);
  	if (variant.has_texture)
-@@ -942,6 +945,7 @@ VkDrawing::draw_mesh(const odin_mesh_t &mesh, const MeshDraw &draw)
+@@ -942,6 +1007,7 @@ VkDrawing::draw_mesh(const odin_mesh_t &mesh, const MeshDraw &draw)
  		m_fn.vkCmdPushConstants(cb, m_mesh_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
  		                        sizeof(m_push), &m_push);
  		m_fn.vkCmdDrawIndexed(cb, mesh.num_tris * 3, 1, mesh.first_index, 0, 0);
