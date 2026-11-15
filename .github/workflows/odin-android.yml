@@ -37,7 +37,20 @@ jobs:
         run: |
           ./fetch-odin.sh
           echo "ODIN_COMMIT=$(cat odin.version)" >> "$GITHUB_ENV"
+      - name: Signing key (secrets ODIN_KEYSTORE_B64, ODIN_KEYSTORE_PASSWORD)
+        env:
+          KEYSTORE_B64: ${{ secrets.ODIN_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/odin-release.p12"
+            echo "ODIN_KEYSTORE=$RUNNER_TEMP/odin-release.p12" >> "$GITHUB_ENV"
+            echo "Signed with the key of the secrets"
+          else
+            echo "::warning::No ODIN_KEYSTORE_B64 secret: the APK is signed with a new debug key, and will not install over the last one"
+          fi
       - name: Build the APK
+        env:
+          ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
           echo "sdk.dir=$ANDROID_HOME" > local.properties

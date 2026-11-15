@@ -931,6 +931,25 @@ index 0000000..d8b10a4
 +} /* namespace odin */
 +
 +#endif /* ODIN_TOUCH_PAD_HPP */
+diff --git a/src/odin/host/renderer/hikaru/drawing.hpp b/src/odin/host/renderer/hikaru/drawing.hpp
+index 92dcbe5..7556acd 100644
+--- a/src/odin/host/renderer/hikaru/drawing.hpp
++++ b/src/odin/host/renderer/hikaru/drawing.hpp
+@@ -48,6 +48,14 @@
+ 
+ namespace odin {
+ 
++/* Counted on the drawing thread for ODIN_DRAW_TIMES (renderer_times.cpp):
++ * the renderings begun for the scene and for a family of the 101, the
++ * pipelines bound, the draws */
++struct DrawCounts {
++	uint64_t scenes = 0, families = 0, pipelines = 0, draws = 0;
++};
++inline DrawCounts g_draw_counts;
++
+ namespace vk {
+ class Context;
+ }
 diff --git a/src/odin/host/renderer/hikaru/gl/drawing_gl.cpp b/src/odin/host/renderer/hikaru/gl/drawing_gl.cpp
 index 72f60cd..b2ed22b 100644
 --- a/src/odin/host/renderer/hikaru/gl/drawing_gl.cpp
@@ -1043,10 +1062,10 @@ index 1253845..6006305 100644
  
  GLuint
 diff --git a/src/odin/host/renderer/hikaru/renderer_times.cpp b/src/odin/host/renderer/hikaru/renderer_times.cpp
-index 91fa8e4..f44fa81 100644
+index 91fa8e4..ffc1660 100644
 --- a/src/odin/host/renderer/hikaru/renderer_times.cpp
 +++ b/src/odin/host/renderer/hikaru/renderer_times.cpp
-@@ -125,6 +125,14 @@ DrawTimes::end()
+@@ -125,6 +125,15 @@ DrawTimes::end()
  		m_sums[i].host_worst = std::max(m_sums[i].host_worst, host[i]);
  	}
  	m_drawn++;
@@ -1054,6 +1073,7 @@ index 91fa8e4..f44fa81 100644
 +	 * without being closed (the app of a phone left) */
 +	if (m_drawn >= 300) {
 +		tell();
++		g_draw_counts = {};
 +		m_sums = {};
 +		m_drawn = m_read = m_lists = m_fragments = 0;
 +		m_fragments_worst = 0;
@@ -1061,6 +1081,55 @@ index 91fa8e4..f44fa81 100644
  }
  
  /* The stamps of a frame, if the card has them all: the last one tells. A
+@@ -210,6 +219,12 @@ DrawTimes::tell() const
+ 	if (m_stamps)
+ 		std::fprintf(stderr, "  %7.3f", ms(card, m_read));
+ 	std::fprintf(stderr, "\n");
++	const double frames = static_cast<double>(m_drawn);
++	std::fprintf(stderr, "drawing:  a frame: %.1f scene renderings, %.1f family renderings, %.1f pipelines bound, "
++	             "%.1f draws\n", static_cast<double>(g_draw_counts.scenes) / frames,
++	             static_cast<double>(g_draw_counts.families) / frames,
++	             static_cast<double>(g_draw_counts.pipelines) / frames,
++	             static_cast<double>(g_draw_counts.draws) / frames);
+ }
+ 
+ } /* namespace odin */
+diff --git a/src/odin/host/renderer/hikaru/vk/scene_vk.cpp b/src/odin/host/renderer/hikaru/vk/scene_vk.cpp
+index 81bdb45..1fd43cc 100644
+--- a/src/odin/host/renderer/hikaru/vk/scene_vk.cpp
++++ b/src/odin/host/renderer/hikaru/vk/scene_vk.cpp
+@@ -601,6 +601,7 @@ VkDrawing::open_scene(bool clear, bool clear_depth)
+ 	                                 nullptr };
+ 
+ 	m_fn.vkCmdBeginRendering(cb, &rendering);
++	g_draw_counts.scenes++;
+ 	set_scene_state(cb, m_collecting ? m_collect_set : VK_NULL_HANDLE);
+ 	m_family = NO_FAMILY;
+ }
+@@ -636,6 +637,7 @@ VkDrawing::open_family(unsigned family)
+ 	                                 nullptr };
+ 
+ 	m_fn.vkCmdBeginRendering(cb, &rendering);
++	g_draw_counts.families++;
+ 	set_scene_state(cb, m_family_set[family]);
+ 	m_family = family;
+ }
+@@ -904,6 +906,7 @@ VkDrawing::draw_mesh(const odin_mesh_t &mesh, const MeshDraw &draw)
+ 	if (p != m_bound_pipeline) {
+ 		m_bound_pipeline = p;
+ 		m_fn.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
++		g_draw_counts.pipelines++;
+ 	}
+ 	set_view(mesh);
+ 	if (variant.has_texture)
+@@ -942,6 +945,7 @@ VkDrawing::draw_mesh(const odin_mesh_t &mesh, const MeshDraw &draw)
+ 		m_fn.vkCmdPushConstants(cb, m_mesh_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+ 		                        sizeof(m_push), &m_push);
+ 		m_fn.vkCmdDrawIndexed(cb, mesh.num_tris * 3, 1, mesh.first_index, 0, 0);
++		g_draw_counts.draws++;
+ 	}
+ }
+ 
 diff --git a/src/odin/host/ui/folder_dialog.cpp b/src/odin/host/ui/folder_dialog.cpp
 index b1bc982..e9308b3 100644
 --- a/src/odin/host/ui/folder_dialog.cpp

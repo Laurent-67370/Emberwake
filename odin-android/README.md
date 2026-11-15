@@ -55,3 +55,15 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
 
 Pour mettre à jour Odin : changer `odin.version`, relancer `./fetch-odin.sh` et
 corriger le patch s'il ne s'applique plus.
+
+## Signature (mises à jour sans désinstaller)
+
+Android n'installe un APK par-dessus l'ancien que s'il est signé avec la même
+clé. Le workflow la lit dans deux secrets du dépôt (Settings → Secrets and
+variables → Actions) :
+
+- `ODIN_KEYSTORE_B64` : le fichier de clé PKCS12 (alias `odin`), en base64 ;
+- `ODIN_KEYSTORE_PASSWORD` : son mot de passe.
+
+Sans eux, chaque APK est signé avec une clé de test nouvelle à chaque
+compilation, et il faut désinstaller avant d'installer.
