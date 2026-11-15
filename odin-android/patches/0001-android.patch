@@ -188,19 +188,6 @@ index 1a4e66f..2b25c2d 100644
  	if (parsed != odin::Parsed::RUN) {
  		odin::print_help(argv[0]);
  		return parsed == odin::Parsed::HELP_ASKED ? 0 : 1;
-diff --git a/src/odin/host/app/options.hpp b/src/odin/host/app/options.hpp
-index 31918b5..3ac4953 100644
---- a/src/odin/host/app/options.hpp
-+++ b/src/odin/host/app/options.hpp
-@@ -48,7 +48,7 @@ inline constexpr const char *VSYNCS[] = { "off", "on", "adaptive" };
- inline constexpr DisplaySides SIDES = DisplaySides::BEZEL;
- inline constexpr const char *SIDES_NAMES[] = { "off", "blur", "image" };
- /* The graphics API by default, and the names of odin.ini */
--#if defined(__APPLE__)
-+#if defined(__APPLE__) || defined(__ANDROID__)
- inline constexpr DisplayApi API = DisplayApi::VULKAN;
- #else
- inline constexpr DisplayApi API = DisplayApi::OPENGL;
 diff --git a/src/odin/host/app/session.cpp b/src/odin/host/app/session.cpp
 index 094c084..af43055 100644
 --- a/src/odin/host/app/session.cpp
@@ -283,6 +270,32 @@ index 6990a0c..c8f98d8 100644
  
  std::string
  odin_data_dir()
+diff --git a/src/odin/host/gfx/gl_common.cpp b/src/odin/host/gfx/gl_common.cpp
+index ddbdf32..ee0ed99 100644
+--- a/src/odin/host/gfx/gl_common.cpp
++++ b/src/odin/host/gfx/gl_common.cpp
+@@ -26,6 +26,7 @@
+  */
+ 
+ #include "odin/host/gfx/gl_common.hpp"
++#include "odin/common/env.hpp"
+ 
+ #include <algorithm>
+ #include <cstdio>
+@@ -201,6 +202,13 @@ fragment_lists()
+ 	static const bool lists = [] {
+ 		GLint buffers = 0;
+ 
++#if defined(__ANDROID__)
++		/* The fragments in lists, written by the shaders to buffers with
++		 * atomics, cost a phone's card (Adreno) some 40 ms a frame: the
++		 * translucent layers are peeled there unless ODIN_GL_LISTS=1 */
++		if (!env_flag("ODIN_GL_LISTS"))
++			return false;
++#endif
+ 		glGetIntegerv(GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, &buffers);
+ 		return buffers > 0 && primitive_ids() && (es_version() >= 32 || has_extension("GL_OES_shader_image_atomic"));
+ 	}();
 diff --git a/src/odin/host/gfx/host_graphics_vk.cpp b/src/odin/host/gfx/host_graphics_vk.cpp
 index f990e61..67362b2 100644
 --- a/src/odin/host/gfx/host_graphics_vk.cpp
@@ -921,6 +934,20 @@ index 0000000..d8b10a4
 +} /* namespace odin */
 +
 +#endif /* ODIN_TOUCH_PAD_HPP */
+diff --git a/src/odin/host/renderer/hikaru/gl/programs_gl.cpp b/src/odin/host/renderer/hikaru/gl/programs_gl.cpp
+index 1253845..6006305 100644
+--- a/src/odin/host/renderer/hikaru/gl/programs_gl.cpp
++++ b/src/odin/host/renderer/hikaru/gl/programs_gl.cpp
+@@ -84,6 +84,9 @@ MeshPrograms::keep_in(const std::string &folder)
+ 		m_driver += text ? reinterpret_cast<const char *>(text) : "";
+ 		m_driver += '\n';
+ 	}
++	/* The programs of the peeling and of the lists share their texts: the
++	 * head that tells them apart is added when they are compiled */
++	m_driver += gl::fragment_lists() ? "lists\n" : "peeling\n";
+ }
+ 
+ GLuint
 diff --git a/src/odin/host/renderer/hikaru/renderer_times.cpp b/src/odin/host/renderer/hikaru/renderer_times.cpp
 index 91fa8e4..f44fa81 100644
 --- a/src/odin/host/renderer/hikaru/renderer_times.cpp
