@@ -1,19 +1,21 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index e034434..ee86cb6 100644
+index e034434..338ea2e 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -16,6 +16,10 @@ include(GNUInstallDirs)
+@@ -16,6 +16,12 @@ include(GNUInstallDirs)
  option(ODIN_NATIVE "Tune for this machine's CPU (-march=native)" ON)
  option(ODIN_LTO "Link-time optimisation (-flto)" ON)
  option(ODIN_GLES "Use OpenGL ES for embedded systems" OFF)
 +# Android: OpenGL ES (and Vulkan), the program a library SDL's activity loads
 +if(ANDROID)
 +	set(ODIN_GLES ON CACHE BOOL "Use OpenGL ES for embedded systems" FORCE)
++	# Bionic's PAGE_SIZE macro would stand for Sh4::PAGE_SIZE
++	add_compile_definitions(__BIONIC_NO_PAGE_SIZE_MACRO)
 +endif()
  set(ODIN_OPT_FLAGS "-O3 -fomit-frame-pointer -fno-stack-protector" CACHE STRING
  	"Optimisation flags")
  set(ODIN_PGO "" CACHE STRING "Profile-guided build: generate or use")
-@@ -119,18 +123,25 @@ function(odin_library name folder target)
+@@ -119,18 +125,25 @@ function(odin_library name folder target)
  	message(STATUS "${ARGN}: from 3rdparty/${folder}")
  endfunction()
  
@@ -43,7 +45,7 @@ index e034434..ee86cb6 100644
  
  set(JANSSON_BUILD_SHARED_LIBS OFF)
  set(JANSSON_EXAMPLES OFF)
-@@ -180,6 +191,8 @@ target_link_libraries(odin_deps INTERFACE odin_jansson odin_vulkan_headers)
+@@ -180,6 +193,8 @@ target_link_libraries(odin_deps INTERFACE odin_jansson odin_vulkan_headers)
  if(APPLE)
  	target_link_libraries(odin_deps INTERFACE odin_glew "-framework OpenGL")
  	set(HOST_WARN_FLAGS -Wno-sign-conversion)
@@ -52,7 +54,7 @@ index e034434..ee86cb6 100644
  elseif(UNIX AND ODIN_GLES)
  	odin_system_only(gles glesv2)
  	odin_system_only(x11 x11)
-@@ -221,7 +234,7 @@ set(ODIN_SOURCES
+@@ -221,7 +236,7 @@ set(ODIN_SOURCES
  	host/ui/folder_dialog.cpp host/ui/pad_view.cpp
  	host/ui/pad_drawings.cpp host/ui/pad_drawings_al2009man.cpp
  	host/ui/gun_drawings.cpp
@@ -61,7 +63,7 @@ index e034434..ee86cb6 100644
  	host/app/version.cpp host/app/hotkeys.cpp host/input/controls.cpp
  	host/input/pointers.cpp host/input/wheel_force.cpp host/input/gun_serial.cpp
  	host/input/evdev.cpp host/input/rawinput.cpp
-@@ -429,8 +442,16 @@ set_source_files_properties(src/odin/host/app/rom_files.cpp PROPERTIES
+@@ -429,8 +444,16 @@ set_source_files_properties(src/odin/host/app/rom_files.cpp PROPERTIES
  set_source_files_properties(src/odin/host/gfx/host_graphics_vk.cpp PROPERTIES
  	COMPILE_DEFINITIONS "${VULKAN_FLAGS}")
  
