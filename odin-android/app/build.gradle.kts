@@ -39,11 +39,28 @@ android {
         }
     }
 
+    // One key for every build, so that a new APK installs over the last one
+    // (the debug key of each CI machine is new every time). The workflow
+    // writes it from the secrets ODIN_KEYSTORE_B64 and ODIN_KEYSTORE_PASSWORD;
+    // without them the APK is signed with the debug key, as before.
+    val keystore = System.getenv("ODIN_KEYSTORE")?.let { file(it) }?.takeIf { it.isFile }
+    val keystorePassword = System.getenv("ODIN_KEYSTORE_PASSWORD")
+    signingConfigs {
+        if (keystore != null && !keystorePassword.isNullOrEmpty()) {
+            create("odin") {
+                storeFile = keystore
+                storeType = "pkcs12"
+                storePassword = keystorePassword
+                keyAlias = "odin"
+                keyPassword = keystorePassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so that the APK installs as it is.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("odin") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {
