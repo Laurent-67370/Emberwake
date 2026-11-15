@@ -208,6 +208,64 @@ index 6990a0c..c8f98d8 100644
  
  std::string
  odin_data_dir()
+diff --git a/src/odin/host/gfx/host_graphics_vk.cpp b/src/odin/host/gfx/host_graphics_vk.cpp
+index f990e61..67362b2 100644
+--- a/src/odin/host/gfx/host_graphics_vk.cpp
++++ b/src/odin/host/gfx/host_graphics_vk.cpp
+@@ -32,6 +32,7 @@
+ #include "odin/host/gfx/host_graphics.hpp"
+ 
+ #include <algorithm>
++#include <utility>
+ #include <cmath>
+ #include <cstdio>
+ #include <cstring>
+@@ -248,6 +249,18 @@ VkGraphics::make_swapchain()
+ 	m_extent = caps.currentExtent.width != UINT32_MAX ? caps.currentExtent :
+ 	           VkExtent2D{ std::clamp(static_cast<uint32_t>(w), caps.minImageExtent.width, caps.maxImageExtent.width),
+ 	                       std::clamp(static_cast<uint32_t>(h), caps.minImageExtent.height, caps.maxImageExtent.height) };
++	/* Android tells the extent as the screen is mounted (portrait on a
++	 * phone) and turns what it is given by currentTransform, for the program
++	 * to draw already turned. Odin draws the window as it is seen: the
++	 * images of the chain are the window's, and Android turns them */
++	VkSurfaceTransformFlagBitsKHR transform = caps.currentTransform;
++#if defined(__ANDROID__)
++	if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
++		transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++		if (caps.currentTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR | VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR))
++			std::swap(m_extent.width, m_extent.height);
++	}
++#endif
+ 	if (m_extent.width == 0 || m_extent.height == 0)
+ 		return;
+ 	if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT))
+@@ -278,7 +291,7 @@ VkGraphics::make_swapchain()
+ 	const VkSwapchainCreateInfoKHR info{ VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, nullptr, 0, m_card->surface(),
+ 	                                     images, format.format, format.colorSpace, m_extent, 1,
+ 	                                     VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE, 0, nullptr,
+-	                                     caps.currentTransform, alpha, mode, VK_TRUE, VK_NULL_HANDLE };
++	                                     transform, alpha, mode, VK_TRUE, VK_NULL_HANDLE };
+ 	m_card->check(m_fn.vkCreateSwapchainKHR(m_card->device(), &info, nullptr, &m_swapchain), "the swap chain");
+ 
+ 	m_fn.vkGetSwapchainImagesKHR(m_card->device(), m_swapchain, &count, nullptr);
+@@ -340,9 +353,17 @@ VkGraphics::show_window()
+ 	const VkPresentInfoKHR present{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, nullptr, 1, &m_drawn[index], 1, &m_swapchain,
+ 	                                &index, nullptr };
+ 	const VkResult result = m_fn.vkQueuePresentKHR(m_card->queue(), &present);
++#if defined(__ANDROID__)
++	/* Suboptimal there only says that Android turns the images itself (the
++	 * identity above, the screen turned); a new size remakes the chain */
++	if (result == VK_ERROR_OUT_OF_DATE_KHR)
++		m_remake = true;
++	else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
++#else
+ 	if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR)
+ 		m_remake = true;
+ 	else if (result != VK_SUCCESS)
++#endif
+ 		m_card->fatal("showing the window", result);
+ }
+ 
 diff --git a/src/odin/host/input/controls.cpp b/src/odin/host/input/controls.cpp
 index c4acd40..2f94263 100644
 --- a/src/odin/host/input/controls.cpp
