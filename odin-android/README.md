@@ -27,6 +27,8 @@ Hikaru est lourde : un téléphone haut de gamme récent est conseillé.
 - **Manette tactile** par-dessus le jeu : stick, A B X Y, LB RB, LT RT
   (gâchettes, pédales), COIN, START et MENU (menu d'Odin). Elle se masque
   quand une vraie manette (Bluetooth / USB) est branchée.
+- **Portrait ou paysage**, comme on tient le téléphone (le verrouillage de la
+  rotation est respecté) : la manette se place autour de l'image dans les deux.
 - La touche **Retour** d'Android ouvre / ferme le menu (Échap).
 - Dans les menus, on touche les éléments comme avec une souris.
 
