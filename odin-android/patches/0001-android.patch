@@ -457,6 +457,49 @@ index f990e61..67362b2 100644
  		m_card->fatal("showing the window", result);
  }
  
+diff --git a/src/odin/host/gfx/vk_common.cpp b/src/odin/host/gfx/vk_common.cpp
+index 2431dbe..51651ce 100644
+--- a/src/odin/host/gfx/vk_common.cpp
++++ b/src/odin/host/gfx/vk_common.cpp
+@@ -26,6 +26,7 @@
+ 
+ #include <algorithm>
+ #include <cstdio>
++#include <utility>
+ #include <cstdlib>
+ #include <cstring>
+ #include <optional>
+@@ -900,7 +901,29 @@ Context::make_buffer(VkDeviceSize size, VkBufferUsageFlags usage)
+ 	check(m_fn.vkCreateBuffer(m_device, &info, nullptr, &buffer.buffer), "a buffer");
+ 	m_fn.vkGetBufferMemoryRequirements(m_device, buffer.buffer, &needs);
+ 	const VkMemoryPropertyFlags seen = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+-	uint32_t type = memory_type(needs.memoryTypeBits, seen | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
++	uint32_t type = UINT32_MAX;
++#if defined(__ANDROID__)
++	/* What the card reads (the vertices, the views and the lights each
++	 * fragment reads, the uploads) in memory the processor writes without
++	 * its cache: a phone's card (Adreno, Mali) reads cached memory through
++	 * the coherence of the processor's caches, slowly. What the processor
++	 * reads back (TRANSFER_DST alone) stays cached. */
++	if (usage & ~VkBufferUsageFlags{ VK_BUFFER_USAGE_TRANSFER_DST_BIT }) {
++		for (uint32_t i = 0; i < m_memory.memoryTypeCount && type == UINT32_MAX; i++) {
++			const VkMemoryPropertyFlags flags = m_memory.memoryTypes[i].propertyFlags;
++
++			if ((needs.memoryTypeBits & (1u << i)) && (flags & seen) == seen &&
++			    !(flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
++				type = i;
++		}
++		static bool told = false;
++		if (!std::exchange(told, true))
++			std::printf("vulkan: buffers the card reads in memory type %u (%s)\n", type,
++			            type == UINT32_MAX ? "none uncached: cached" : "uncached");
++	}
++#endif
++	if (type == UINT32_MAX)
++		type = memory_type(needs.memoryTypeBits, seen | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+ 	if (type == UINT32_MAX)
+ 		type = memory_type(needs.memoryTypeBits, seen);
+ 	const VkMemoryAllocateInfo memory{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, needs.size, type };
 diff --git a/src/odin/host/input/controls.cpp b/src/odin/host/input/controls.cpp
 index c4acd40..2f94263 100644
 --- a/src/odin/host/input/controls.cpp
