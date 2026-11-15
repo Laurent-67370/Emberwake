@@ -36,6 +36,9 @@ public class OdinActivity extends SDLActivity {
             // closed (ODIN_STATS)
             Os.setenv("ODIN_SPEED", "1", false);
             Os.setenv("ODIN_STATS", "1", false);
+            // The cost of each part of the drawing, on the thread and on the
+            // graphics card, every 300 frames
+            Os.setenv("ODIN_DRAW_TIMES", "1", false);
         } catch (ErrnoException e) {
             android.util.Log.e("Odin", "setenv", e);
         }

@@ -921,6 +921,25 @@ index 0000000..d8b10a4
 +} /* namespace odin */
 +
 +#endif /* ODIN_TOUCH_PAD_HPP */
+diff --git a/src/odin/host/renderer/hikaru/renderer_times.cpp b/src/odin/host/renderer/hikaru/renderer_times.cpp
+index 91fa8e4..f44fa81 100644
+--- a/src/odin/host/renderer/hikaru/renderer_times.cpp
++++ b/src/odin/host/renderer/hikaru/renderer_times.cpp
+@@ -125,6 +125,14 @@ DrawTimes::end()
+ 		m_sums[i].host_worst = std::max(m_sums[i].host_worst, host[i]);
+ 	}
+ 	m_drawn++;
++	/* Told every 300 frames too, then counted again: a game may end
++	 * without being closed (the app of a phone left) */
++	if (m_drawn >= 300) {
++		tell();
++		m_sums = {};
++		m_drawn = m_read = m_lists = m_fragments = 0;
++		m_fragments_worst = 0;
++	}
+ }
+ 
+ /* The stamps of a frame, if the card has them all: the last one tells. A
 diff --git a/src/odin/host/ui/folder_dialog.cpp b/src/odin/host/ui/folder_dialog.cpp
 index b1bc982..e9308b3 100644
 --- a/src/odin/host/ui/folder_dialog.cpp
