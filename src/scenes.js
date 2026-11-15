@@ -92,7 +92,7 @@ export class Title {
       if (v.startsWith('Son')) { setMuted(!audioState.muted); sfx('select'); return; }
       sfx('select');
       if (v === 'Continuer') { G.save = loadSave(); go(() => new MapScene()); }
-      else { eraseSave(); G.save = newSave(); writeSave(); go(() => new Story(STORY_INTRO, () => new MapScene())); }
+      else { eraseSave(); G.save = newSave(); writeSave(); go(() => new Story(STORY_INTRO, () => new RealmCard(0))); }
     }
   }
   draw() {
@@ -158,8 +158,12 @@ export class MapScene {
   constructor() {
     this.t = 0; resetRegs();
     const cleared = G.save.cleared.length;
-    const at = REALMS[Math.min(cleared, 4)].node;
-    this.cam = { x: at[0], y: at[1] + 150, angle: -Math.PI / 2, height: 44, horizon: 64, fov: 0.9 };
+    this.target = Math.min(cleared, 4);
+    const at = REALMS[this.target].node, from = REALMS[Math.max(0, this.target - 1)].node;
+    let a = this.target > 0 ? Math.atan2(at[1] - from[1], at[0] - from[0]) : -Math.PI / 2;
+    this.cam = { x: at[0] - Math.cos(a) * 230, y: at[1] - Math.sin(a) * 230, angle: a, height: 44, horizon: 64, fov: 0.9 };
+    this.cam.x = clamp(this.cam.x, 40, 984); this.cam.y = clamp(this.cam.y, 40, 984);
+    this.cam.angle = Math.atan2(at[1] - this.cam.y, at[0] - this.cam.x);
     this.speed = 0; this.near = -1; this.bank = 0;
     playSong(SONGS.map);
     writeSave();
@@ -219,7 +223,21 @@ export class MapScene {
       windowBox(20, 178, 216, 40);
       text(r.name, 128, 186, '#ffe9a0', 'c');
       text(open ? (G.save.cleared.includes(this.near) ? 'Éclat obtenu · X/Start : revisiter' : 'X / Start : entrer') : 'Scellé — vainquez le gardien précédent', 128, 200, open ? '#fff' : '#a89cc0', 'c');
-    } else text('◀ ▶ virer   ▲/A accélérer', 128, 212, '#e8dcff', 'c');
+    } else {
+      // compass: arrow at the top pointing toward the next island to visit
+      const T = REALMS[this.target].node;
+      const gx = c.x + Math.cos(c.angle) * 70, gy = c.y + Math.sin(c.angle) * 70;
+      let rel = Math.atan2(T[1] - gy, T[0] - gx) - c.angle;
+      while (rel > Math.PI) rel -= Math.PI * 2; while (rel < -Math.PI) rel += Math.PI * 2;
+      const ax = 128, ay = 40, b = Math.sin(this.t / 8) * 2;
+      ctx.save(); ctx.translate(ax, ay + b); ctx.rotate(rel - Math.PI / 2);
+      ctx.fillStyle = '#140c1c'; ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(-8, -9); ctx.lineTo(-3, 0); ctx.lineTo(-8, 9); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffd060'; ctx.beginPath(); ctx.moveTo(11, 0); ctx.lineTo(-6, -7); ctx.lineTo(-2, 0); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      windowBox(14, 184, 228, 34, 0.75);
+      text('Cap sur : ' + REALMS[this.target].name, 128, 191, '#ffe9a0', 'c');
+      text('◀ ▶ virer · ▲/A accélérer · X atterrir', 128, 204, '#e8dcff', 'c');
+    }
   }
 }
 
