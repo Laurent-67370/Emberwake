@@ -83,10 +83,20 @@ index e034434..338ea2e 100644
  	RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
  target_include_directories(odin PRIVATE src)
 diff --git a/src/odin/host/app/main.cpp b/src/odin/host/app/main.cpp
-index 1a4e66f..c409baa 100644
+index 1a4e66f..532c7d5 100644
 --- a/src/odin/host/app/main.cpp
 +++ b/src/odin/host/app/main.cpp
-@@ -49,6 +49,12 @@
+@@ -25,7 +25,9 @@
+  * along with Valkyrie.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include <algorithm>
+ #include <cstdio>
++#include <functional>
+ #include <cstdlib>
+ #include <cstring>
+ #include <memory>
+@@ -49,6 +51,14 @@
  #include "odin/host/app/user_files.hpp"
  #include "odin/host/app/version.hpp"
  
@@ -94,12 +104,65 @@ index 1a4e66f..c409baa 100644
 +/* SDL's activity calls SDL_main in the library */
 +#include <SDL3/SDL_hints.h>
 +#include <SDL3/SDL_main.h>
++#include <sched.h>
++#include <unistd.h>
 +#endif
 +
  namespace odin {
  namespace {
  
-@@ -276,6 +282,13 @@ main(int argc, char **argv)
+@@ -267,6 +277,50 @@ games_test_list()
+ 	return next;
+ }
+ 
++#if defined(__ANDROID__)
++/* The board runs on one thread, the drawing on another: both kept off the
++ * slow cores of the phone (big.LITTLE), where Android may put them. The
++ * threads made after this one (drawing, sound) take the same cores. */
++void
++keep_to_fast_cores()
++{
++	const long count = sysconf(_SC_NPROCESSORS_CONF);
++	std::vector<long> speeds;
++
++	for (long cpu = 0; cpu < count && cpu < CPU_SETSIZE; cpu++) {
++		char path[96];
++		long khz = 0;
++
++		std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%ld/cpufreq/cpuinfo_max_freq", cpu);
++		if (std::FILE *const file = std::fopen(path, "r")) {
++			if (std::fscanf(file, "%ld", &khz) != 1)
++				khz = 0;
++			std::fclose(file);
++		}
++		speeds.push_back(khz);
++	}
++	std::vector<long> tiers(speeds);
++	std::sort(tiers.begin(), tiers.end(), std::greater<long>());
++	tiers.erase(std::unique(tiers.begin(), tiers.end()), tiers.end());
++	tiers.erase(std::remove(tiers.begin(), tiers.end(), 0L), tiers.end());
++	if (tiers.size() < 2)
++		return;
++	/* Two kinds of cores: the big ones; three or more: the two fastest */
++	const long least = tiers.size() >= 3 ? tiers[1] : tiers[0];
++	cpu_set_t set;
++	int kept = 0;
++
++	CPU_ZERO(&set);
++	for (size_t cpu = 0; cpu < speeds.size(); cpu++)
++		if (speeds[cpu] >= least) {
++			CPU_SET(cpu, &set);
++			kept++;
++		}
++	if (sched_setaffinity(0, sizeof(set), &set) == 0)
++		std::printf("cpu: kept to the %d cores of %ld MHz and more\n", kept, least / 1000);
++}
++#endif
++
+ } /* namespace */
+ } /* namespace odin */
+ 
+@@ -276,6 +330,14 @@ main(int argc, char **argv)
  	odin::Options options;
  	odin::GameList games;
  
@@ -109,6 +172,7 @@ index 1a4e66f..c409baa 100644
 +	/* Either way up, as the phone is held (the lock of the rotation kept):
 +	 * the menus and the touch pad lay themselves out for the window */
 +	SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait");
++	odin::keep_to_fast_cores();
 +#endif
  	/* With the OpenGL driver of Intel loaded, a process of Windows ends
  	 * without what its buffers still hold: it goes out here. */
@@ -322,10 +386,10 @@ index 3cad3b1..b54f8d8 100644
  
 diff --git a/src/odin/host/input/touch_pad.cpp b/src/odin/host/input/touch_pad.cpp
 new file mode 100644
-index 0000000..325e737
+index 0000000..cbed917
 --- /dev/null
 +++ b/src/odin/host/input/touch_pad.cpp
-@@ -0,0 +1,448 @@
+@@ -0,0 +1,465 @@
 +/*
 + *  ██████╗ ██████╗ ██╗███╗   ██╗
 + * ██╔═══██╗██╔══██╗██║████╗  ██║
@@ -425,6 +489,7 @@ index 0000000..325e737
 +State g_state;
 +std::atomic<Uint64> g_drawn_ns{ 0 };
 +std::atomic<bool> g_hidden{ false };
++std::atomic<float> g_fps{ 0.0f };
 +
 +constexpr Uint64 SHOWN_NS = 250'000'000;
 +
@@ -696,6 +761,12 @@ index 0000000..325e737
 +}
 +
 +void
++touch_pad_speed(float fps)
++{
++	g_fps = fps;
++}
++
++void
 +touch_pad_draw()
 +{
 +	if (!touch_pad_wanted() || !ImGui::GetCurrentContext())
@@ -744,6 +815,16 @@ index 0000000..325e737
 +	const float thick = std::max(1.5f, std::min(room.x, room.y) * 0.004f);
 +	ImFont *const font = ImGui::GetFont();
 +
++	/* The speed, top left: 60 is full speed */
++	if (const float fps = g_fps.load(); fps > 0.0f) {
++		char speed[32];
++		const float size = std::max(14.0f, std::min(room.x, room.y) * 0.035f);
++
++		std::snprintf(speed, sizeof(speed), "%.0f FPS", static_cast<double>(fps));
++		draw->AddText(font, size, { size * 0.6f, size * 0.4f },
++		              fps >= 58.0f ? IM_COL32(140, 230, 140, 200) : IM_COL32(240, 170, 90, 220), speed);
++	}
++
 +	for (int p = 0; p < PARTS; p++) {
 +		const Shape &s = shapes[static_cast<size_t>(p)];
 +		const ImU32 inside = held[static_cast<size_t>(p)] ? pressed : fill;
@@ -776,10 +857,10 @@ index 0000000..325e737
 +} /* namespace odin */
 diff --git a/src/odin/host/input/touch_pad.hpp b/src/odin/host/input/touch_pad.hpp
 new file mode 100644
-index 0000000..86ff2fc
+index 0000000..d8b10a4
 --- /dev/null
 +++ b/src/odin/host/input/touch_pad.hpp
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,49 @@
 +/*
 + *  ██████╗ ██████╗ ██╗███╗   ██╗
 + * ██╔═══██╗██╔══██╗██║████╗  ██║
@@ -823,6 +904,8 @@ index 0000000..86ff2fc
 +void touch_pad_attach();
 +void touch_pad_detach();
 +void touch_pad_draw();
++/* The frames per second, shown in a corner of the pad (0: none yet) */
++void touch_pad_speed(float fps);
 +
 +} /* namespace odin */
 +
@@ -937,7 +1020,7 @@ index d6b727c..f2e748b 100644
  	const std::string home = env_text("HOME"), data = env_text("XDG_DATA_HOME");
  
 diff --git a/src/odin/host/video/display.cpp b/src/odin/host/video/display.cpp
-index f185cd7..58d7662 100644
+index f185cd7..230801a 100644
 --- a/src/odin/host/video/display.cpp
 +++ b/src/odin/host/video/display.cpp
 @@ -26,6 +26,7 @@
@@ -958,6 +1041,14 @@ index f185cd7..58d7662 100644
  		return false;
  	make_menu();
  	m_menu->build_note(*bar);
+@@ -983,6 +985,7 @@ Display::show_speed()
+ 		                   static_cast<double>(now - m_title_since);
+ 
+ 		m_fps = static_cast<float>(fps);
++		touch_pad_speed(m_fps);
+ 		if (!m_message.empty())
+ 			std::snprintf(title, sizeof(title), "%s (%4.1f FPS) [%s]", m_title.c_str(), fps, m_message.c_str());
+ 		else
 diff --git a/src/odin/host/video/x11_window.cpp b/src/odin/host/video/x11_window.cpp
 index 42a24db..d7fcd6d 100644
 --- a/src/odin/host/video/x11_window.cpp
