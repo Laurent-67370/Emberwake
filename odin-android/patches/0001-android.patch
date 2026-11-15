@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index e034434..338ea2e 100644
+index e034434..23aa3bd 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -16,6 +16,12 @@ include(GNUInstallDirs)
@@ -63,7 +63,67 @@ index e034434..338ea2e 100644
  	host/app/version.cpp host/app/hotkeys.cpp host/input/controls.cpp
  	host/input/pointers.cpp host/input/wheel_force.cpp host/input/gun_serial.cpp
  	host/input/evdev.cpp host/input/rawinput.cpp
-@@ -429,8 +444,16 @@ set_source_files_properties(src/odin/host/app/rom_files.cpp PROPERTIES
+@@ -312,7 +327,12 @@ set_source_files_properties(src/miniz/miniz.c PROPERTIES COMPILE_DEFINITIONS USE
+ set_source_files_properties(src/odin/host/app/zip_crc.cpp PROPERTIES
+ 	COMPILE_OPTIONS "-isystem;${CMAKE_SOURCE_DIR}/src/miniz")
+ 
+-# Vulkan shaders to SPIR-V
++# Vulkan shaders to SPIR-V; on Android the depth of the meshes is taken at
++# their corners (mesh.vert, VERTEX_DEPTH), not written by each fragment
++set(GLSL_EXTRA "")
++if(ANDROID)
++	set(GLSL_EXTRA "echo '#define VERTEX_DEPTH 1'; ")
++endif()
+ set(GLSL ${CMAKE_SOURCE_DIR}/src/odin/host/gfx/glsl)
+ set(SPIRV_DIR ${CMAKE_BINARY_DIR}/spirv)
+ file(MAKE_DIRECTORY ${SPIRV_DIR}/glsl)
+@@ -324,10 +344,10 @@ foreach(shader whole_picture.vert blend.frag compose.vert compose.frag present.f
+ 	string(REGEX REPLACE ".*\\." "" stage ${shader})
+ 	set(out ${SPIRV_DIR}/glsl/${shader}.spv)
+ 	if(shader STREQUAL "sort.frag")
+-		set(script "{ echo '#version 450'; echo '#define LISTS_SET 0'; cat \"$2\" \"$3\"; } | \"$0\" -V --stdin -S frag -o \"$1\"")
++		set(script "{ echo '#version 450'; ${GLSL_EXTRA}echo '#define LISTS_SET 0'; cat \"$2\" \"$3\"; } | \"$0\" -V --stdin -S frag -o \"$1\"")
+ 		set(inputs ${GLSL}/fragment_lists.glsl ${GLSL}/${shader})
+ 	else()
+-		set(script "{ echo '#version 450'; cat \"$2\"; } | \"$0\" -V --stdin -S ${stage} -o \"$1\"")
++		set(script "{ echo '#version 450'; ${GLSL_EXTRA}cat \"$2\"; } | \"$0\" -V --stdin -S ${stage} -o \"$1\"")
+ 		set(inputs ${GLSL}/${shader})
+ 	endif()
+ 	add_custom_command(OUTPUT ${out}
+@@ -337,13 +357,13 @@ foreach(shader whole_picture.vert blend.frag compose.vert compose.frag present.f
+ endforeach()
+ set(out ${SPIRV_DIR}/glsl/mesh_collect.frag.spv)
+ add_custom_command(OUTPUT ${out}
+-	COMMAND sh -c "{ echo '#version 450'; echo '#define COLLECT 1'; echo '#define LISTS_SET 3'; cat \"$2\" \"$3\"; } | \"$0\" -V --stdin -S frag -o \"$1\""
++	COMMAND sh -c "{ echo '#version 450'; ${GLSL_EXTRA}echo '#define COLLECT 1'; echo '#define LISTS_SET 3'; cat \"$2\" \"$3\"; } | \"$0\" -V --stdin -S frag -o \"$1\""
+ 		${GLSLANG} ${out} ${GLSL}/fragment_lists.glsl ${GLSL}/mesh.frag
+ 	DEPENDS ${GLSL}/fragment_lists.glsl ${GLSL}/mesh.frag VERBATIM)
+ list(APPEND SPIRV ${out})
+ set(out ${SPIRV_DIR}/glsl/pmx_native.frag.spv)
+ add_custom_command(OUTPUT ${out}
+-	COMMAND sh -c "{ echo '#version 450'; echo '#define NATIVE 1'; cat \"$2\"; } | \"$0\" -V --stdin -S frag -o \"$1\""
++	COMMAND sh -c "{ echo '#version 450'; ${GLSL_EXTRA}echo '#define NATIVE 1'; cat \"$2\"; } | \"$0\" -V --stdin -S frag -o \"$1\""
+ 		${GLSLANG} ${out} ${GLSL}/pmx.frag
+ 	DEPENDS ${GLSL}/pmx.frag VERBATIM)
+ list(APPEND SPIRV ${out})
+@@ -355,14 +375,14 @@ foreach(variant list native_list)
+ 		set(defines "echo '#define NATIVE 1'; echo '#define LIST 1'")
+ 	endif()
+ 	add_custom_command(OUTPUT ${out}
+-		COMMAND sh -c "{ echo '#version 450'; ${defines}; cat \"$2\"; } | \"$0\" -V --stdin -S frag -o \"$1\""
++		COMMAND sh -c "{ echo '#version 450'; ${GLSL_EXTRA}${defines}; cat \"$2\"; } | \"$0\" -V --stdin -S frag -o \"$1\""
+ 			${GLSLANG} ${out} ${GLSL}/pmx.frag
+ 		DEPENDS ${GLSL}/pmx.frag VERBATIM)
+ 	list(APPEND SPIRV ${out})
+ endforeach()
+ set(out ${SPIRV_DIR}/glsl/mesh_families.frag.spv)
+ add_custom_command(OUTPUT ${out}
+-	COMMAND sh -c "{ echo '#version 450'; echo '#define FAMILIES 1'; cat \"$2\"; } | \"$0\" -V --stdin -S frag -o \"$1\""
++	COMMAND sh -c "{ echo '#version 450'; ${GLSL_EXTRA}echo '#define FAMILIES 1'; cat \"$2\"; } | \"$0\" -V --stdin -S frag -o \"$1\""
+ 		${GLSLANG} ${out} ${GLSL}/mesh.frag
+ 	DEPENDS ${GLSL}/mesh.frag VERBATIM)
+ list(APPEND SPIRV ${out})
+@@ -429,8 +449,16 @@ set_source_files_properties(src/odin/host/app/rom_files.cpp PROPERTIES
  set_source_files_properties(src/odin/host/gfx/host_graphics_vk.cpp PROPERTIES
  	COMPILE_DEFINITIONS "${VULKAN_FLAGS}")
  
@@ -271,7 +331,7 @@ index 6990a0c..c8f98d8 100644
  std::string
  odin_data_dir()
 diff --git a/src/odin/host/gfx/gl_common.cpp b/src/odin/host/gfx/gl_common.cpp
-index ddbdf32..eba9bd7 100644
+index ddbdf32..5a222d1 100644
 --- a/src/odin/host/gfx/gl_common.cpp
 +++ b/src/odin/host/gfx/gl_common.cpp
 @@ -26,6 +26,7 @@
@@ -282,7 +342,18 @@ index ddbdf32..eba9bd7 100644
  
  #include <algorithm>
  #include <cstdio>
-@@ -201,6 +202,10 @@ fragment_lists()
+@@ -73,6 +74,10 @@ es_head()
+ 	        "precision highp usampler2D;\nprecision highp image2D;\nprecision highp uimage2D;\n";
+ 	if (!fragment_lists())
+ 		head += "#define PEELING 1\n";
++#if defined(__ANDROID__)
++	/* The depth of the meshes taken at their corners (mesh.vert) */
++	head += "#define VERTEX_DEPTH 1\n";
++#endif
+ 	return head;
+ }
+ #endif
+@@ -201,6 +206,10 @@ fragment_lists()
  	static const bool lists = [] {
  		GLint buffers = 0;
  
@@ -293,6 +364,41 @@ index ddbdf32..eba9bd7 100644
  		glGetIntegerv(GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, &buffers);
  		return buffers > 0 && primitive_ids() && (es_version() >= 32 || has_extension("GL_OES_shader_image_atomic"));
  	}();
+diff --git a/src/odin/host/gfx/glsl/mesh.frag b/src/odin/host/gfx/glsl/mesh.frag
+index bcae486..5743a1f 100644
+--- a/src/odin/host/gfx/glsl/mesh.frag
++++ b/src/odin/host/gfx/glsl/mesh.frag
+@@ -345,8 +345,12 @@ main (void)
+ 	 * near planes the games send, the projected depth cannot tell apart
+ 	 * surfaces that the cabinets do (the shadow of the AIRTRIX combo
+ 	 * labels lies 0.06 behind them at a depth of 560). */
++#ifdef VERTEX_DEPTH
++	float frag_depth = gl_FragCoord.z;
++#else
+ 	float frag_depth = log2 (1.0 + 1.0 / gl_FragCoord.w) * (1.0 / 24.0);
+ 	gl_FragDepth = frag_depth;
++#endif
+ 
+ #if FAMILIES != 0
+ 	/* In a view with both families of the 101 (depth_bias.hpp), a mesh is
+diff --git a/src/odin/host/gfx/glsl/mesh.vert b/src/odin/host/gfx/glsl/mesh.vert
+index ecbd545..d9ed644 100644
+--- a/src/odin/host/gfx/glsl/mesh.vert
++++ b/src/odin/host/gfx/glsl/mesh.vert
+@@ -148,6 +148,13 @@ void main (void) {
+ 	}
+ 	/* The depth bias brings the whole position nearer: same pixel. */
+ 	gl_Position = mul (u_projection, vec4 (p_position.xyz * u_depth_scale, 1.0));
++#ifdef VERTEX_DEPTH
++	/* The logarithm of the eye depth (mesh.frag) at the corners, taken
++	 * straight between them: the fragments keep the depth of the card,
++	 * which tests and drops the hidden ones before shading them (a phone's
++	 * card shades every fragment of a shader that writes its depth) */
++	gl_Position.z = (log2 (1.0 + max (gl_Position.w, 0.0)) * (2.0 / 24.0) - 1.0) * gl_Position.w;
++#endif
+ #ifdef VULKAN
+ 	if (GL_CLIP_SPACE == 0)
+ 		gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;
 diff --git a/src/odin/host/gfx/host_graphics_vk.cpp b/src/odin/host/gfx/host_graphics_vk.cpp
 index f990e61..67362b2 100644
 --- a/src/odin/host/gfx/host_graphics_vk.cpp
@@ -1048,16 +1154,19 @@ index 72f60cd..b2ed22b 100644
  
  } /* namespace odin */
 diff --git a/src/odin/host/renderer/hikaru/gl/programs_gl.cpp b/src/odin/host/renderer/hikaru/gl/programs_gl.cpp
-index 1253845..6006305 100644
+index 1253845..eb1d710 100644
 --- a/src/odin/host/renderer/hikaru/gl/programs_gl.cpp
 +++ b/src/odin/host/renderer/hikaru/gl/programs_gl.cpp
-@@ -84,6 +84,9 @@ MeshPrograms::keep_in(const std::string &folder)
+@@ -84,6 +84,12 @@ MeshPrograms::keep_in(const std::string &folder)
  		m_driver += text ? reinterpret_cast<const char *>(text) : "";
  		m_driver += '\n';
  	}
 +	/* The programs of the peeling and of the lists share their texts: the
 +	 * head that tells them apart is added when they are compiled */
 +	m_driver += gl::fragment_lists() ? "lists\n" : "peeling\n";
++#if defined(__ANDROID__)
++	m_driver += "vertex depth\n";
++#endif
  }
  
  GLuint
