@@ -271,7 +271,7 @@ index 6990a0c..c8f98d8 100644
  std::string
  odin_data_dir()
 diff --git a/src/odin/host/gfx/gl_common.cpp b/src/odin/host/gfx/gl_common.cpp
-index ddbdf32..ee0ed99 100644
+index ddbdf32..eba9bd7 100644
 --- a/src/odin/host/gfx/gl_common.cpp
 +++ b/src/odin/host/gfx/gl_common.cpp
 @@ -26,6 +26,7 @@
@@ -282,17 +282,14 @@ index ddbdf32..ee0ed99 100644
  
  #include <algorithm>
  #include <cstdio>
-@@ -201,6 +202,13 @@ fragment_lists()
+@@ -201,6 +202,10 @@ fragment_lists()
  	static const bool lists = [] {
  		GLint buffers = 0;
  
-+#if defined(__ANDROID__)
-+		/* The fragments in lists, written by the shaders to buffers with
-+		 * atomics, cost a phone's card (Adreno) some 40 ms a frame: the
-+		 * translucent layers are peeled there unless ODIN_GL_LISTS=1 */
-+		if (!env_flag("ODIN_GL_LISTS"))
++		/* ODIN_GL_PEEL=1: the translucent layers peeled, as without the
++		 * lists (a test: on an Adreno 740 the peeling was the slower) */
++		if (env_flag("ODIN_GL_PEEL"))
 +			return false;
-+#endif
  		glGetIntegerv(GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, &buffers);
  		return buffers > 0 && primitive_ids() && (es_version() >= 32 || has_extension("GL_OES_shader_image_atomic"));
  	}();
@@ -934,6 +931,103 @@ index 0000000..d8b10a4
 +} /* namespace odin */
 +
 +#endif /* ODIN_TOUCH_PAD_HPP */
+diff --git a/src/odin/host/renderer/hikaru/gl/drawing_gl.cpp b/src/odin/host/renderer/hikaru/gl/drawing_gl.cpp
+index 72f60cd..b2ed22b 100644
+--- a/src/odin/host/renderer/hikaru/gl/drawing_gl.cpp
++++ b/src/odin/host/renderer/hikaru/gl/drawing_gl.cpp
+@@ -31,6 +31,8 @@
+ 
+ #include "odin/host/gfx/gl_common.hpp"
+ 
++#include <SDL3/SDL_video.h>
++
+ namespace odin {
+ 
+ namespace {
+@@ -188,35 +190,43 @@ GlDrawing::make_sampler(const TextureSampling &sampling, unsigned anisotropy)
+ }
+ 
+ #ifdef ODIN_GLES
+-/* OpenGL ES has timestamps only with GL_EXT_disjoint_timer_query */
+-bool
+-GlDrawing::has_stamps() const
+-{
+-	return false;
+-}
++/* OpenGL ES has timestamps only with GL_EXT_disjoint_timer_query, its
++ * functions asked of the driver */
++namespace {
+ 
+-uint32_t
+-GlDrawing::put_stamp()
+-{
+-	return 0;
+-}
++struct TimerQueries {
++	void(GL_APIENTRYP counter)(GLuint, GLenum) = nullptr;
++	void(GL_APIENTRYP result)(GLuint, GLenum, GLuint64 *) = nullptr;
++};
+ 
+-bool
+-GlDrawing::reached(uint32_t)
++const TimerQueries &
++timer_queries()
+ {
+-	return true;
+-}
++	static const TimerQueries queries = [] {
++		TimerQueries q;
+ 
+-uint64_t
+-GlDrawing::stamp_time(uint32_t)
+-{
+-	return 0;
++		if (gl::has_extension("GL_EXT_disjoint_timer_query")) {
++			q.counter = reinterpret_cast<decltype(q.counter)>(SDL_GL_GetProcAddress("glQueryCounterEXT"));
++			q.result = reinterpret_cast<decltype(q.result)>(SDL_GL_GetProcAddress("glGetQueryObjectui64vEXT"));
++		}
++		if (!q.counter || !q.result)
++			q = {};
++		return q;
++	}();
++	return queries;
+ }
+ 
+-void
+-GlDrawing::forget_stamp(uint32_t, bool)
++constexpr GLenum TIMESTAMP_EXT = 0x8E28;
++
++} /* namespace */
++
++bool
++GlDrawing::has_stamps() const
+ {
++	return timer_queries().counter != nullptr;
+ }
++#define glQueryCounter(id, target) timer_queries().counter(id, TIMESTAMP_EXT)
++#define glGetQueryObjectui64v(id, name, at) timer_queries().result(id, name, at)
+ #else
+ bool
+ GlDrawing::has_stamps() const
+@@ -227,6 +237,8 @@ GlDrawing::has_stamps() const
+ 	return bits > 0;
+ }
+ 
++#endif
++
+ uint32_t
+ GlDrawing::put_stamp()
+ {
+@@ -269,6 +281,9 @@ GlDrawing::forget_stamp(uint32_t stamp, bool again)
+ 	else
+ 		glDeleteQueries(1, &stamp);
+ }
++#ifdef ODIN_GLES
++#undef glQueryCounter
++#undef glGetQueryObjectui64v
+ #endif
+ 
+ } /* namespace odin */
 diff --git a/src/odin/host/renderer/hikaru/gl/programs_gl.cpp b/src/odin/host/renderer/hikaru/gl/programs_gl.cpp
 index 1253845..6006305 100644
 --- a/src/odin/host/renderer/hikaru/gl/programs_gl.cpp
