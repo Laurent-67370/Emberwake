@@ -30,7 +30,9 @@ export function makeCanvas(w, h) {
 
 // --- integer scaling of the output -------------------------------------------
 function fit() {
-  const s = Math.max(1, Math.floor(Math.min(innerWidth / W, (innerHeight - 24) / H)));
+  const touch = matchMedia('(pointer: coarse)').matches;
+  const fs = Math.min(innerWidth / W, (innerHeight - (touch ? 0 : 24)) / H);
+  const s = touch ? fs : Math.max(1, Math.floor(fs) || fs);
   screen.style.width = W * s + 'px';
   screen.style.height = H * s + 'px';
 }

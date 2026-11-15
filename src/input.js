@@ -65,7 +65,7 @@ export function setupTouch() {
   #tpL div{width:52px;height:52px;border-radius:12px}
   #tpR{right:max(14px,env(safe-area-inset-right));width:170px;height:150px}
   #tpR div{width:62px;height:62px}
-  #tpS{position:fixed;top:max(8px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:5;
+  #tpS{position:fixed;top:max(10px,env(safe-area-inset-top));right:max(14px,env(safe-area-inset-right));z-index:5;
     padding:6px 16px;border-radius:14px;background:rgba(255,255,255,.12);color:#fff;font:600 12px system-ui;touch-action:none}
   body.touch #help{display:none}`;
   document.head.appendChild(css);
