@@ -24,6 +24,8 @@
         android:allowBackup="false"
         android:hardwareAccelerated="true"
         android:requestLegacyExternalStorage="true"
+        android:appCategory="game"
+        android:isGame="true"
         android:enableOnBackInvokedCallback="false"
         android:theme="@style/OdinTheme">
 
