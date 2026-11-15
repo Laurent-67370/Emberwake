@@ -31,6 +31,11 @@ public class OdinActivity extends SDLActivity {
             Os.setenv("ODIN_ANDROID_FOLDER", folder, true);
             Os.setenv("ODIN_ANDROID_DATA", data, true);
             Os.setenv("HOME", folder, true);
+            // Measures in odin.log while the port is tuned: the speed every
+            // second (ODIN_SPEED), and where the time went when a game is
+            // closed (ODIN_STATS)
+            Os.setenv("ODIN_SPEED", "1", false);
+            Os.setenv("ODIN_STATS", "1", false);
         } catch (ErrnoException e) {
             android.util.Log.e("Odin", "setenv", e);
         }

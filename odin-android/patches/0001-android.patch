@@ -83,7 +83,7 @@ index e034434..338ea2e 100644
  	RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
  target_include_directories(odin PRIVATE src)
 diff --git a/src/odin/host/app/main.cpp b/src/odin/host/app/main.cpp
-index 1a4e66f..532c7d5 100644
+index 1a4e66f..2b25c2d 100644
 --- a/src/odin/host/app/main.cpp
 +++ b/src/odin/host/app/main.cpp
 @@ -25,7 +25,9 @@
@@ -162,7 +162,7 @@ index 1a4e66f..532c7d5 100644
  } /* namespace */
  } /* namespace odin */
  
-@@ -276,6 +330,14 @@ main(int argc, char **argv)
+@@ -276,6 +330,13 @@ main(int argc, char **argv)
  	odin::Options options;
  	odin::GameList games;
  
@@ -172,11 +172,22 @@ index 1a4e66f..532c7d5 100644
 +	/* Either way up, as the phone is held (the lock of the rotation kept):
 +	 * the menus and the touch pad lay themselves out for the window */
 +	SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait");
-+	odin::keep_to_fast_cores();
 +#endif
  	/* With the OpenGL driver of Intel loaded, a process of Windows ends
  	 * without what its buffers still hold: it goes out here. */
  	std::atexit([] { std::fflush(nullptr); });
+@@ -291,6 +352,11 @@ main(int argc, char **argv)
+ 	}
+ 	odin::start_log(options);
+ 	odin::print_banner();
++#if defined(__ANDROID__)
++	/* Before the drawing thread, which takes the same cores; after the
++	 * log, which tells them */
++	odin::keep_to_fast_cores();
++#endif
+ 	if (parsed != odin::Parsed::RUN) {
+ 		odin::print_help(argv[0]);
+ 		return parsed == odin::Parsed::HELP_ASKED ? 0 : 1;
 diff --git a/src/odin/host/app/options.hpp b/src/odin/host/app/options.hpp
 index 31918b5..3ac4953 100644
 --- a/src/odin/host/app/options.hpp
