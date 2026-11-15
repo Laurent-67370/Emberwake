@@ -1,0 +1,13 @@
+import { createRequire } from 'module'; const { chromium } = createRequire(import.meta.url)('playwright');
+import http from 'http'; import fs from 'fs'; import path from 'path';
+const root = path.resolve(process.argv[4] || '.');
+const types = { '.html':'text/html', '.js':'text/javascript', '.json':'application/json', '.png':'image/png' };
+const srv = http.createServer((q, r) => { const p = path.join(root, decodeURIComponent(q.url.split('?')[0])); fs.readFile(p, (e, d) => { if (e) { r.writeHead(404); r.end(); return; } r.writeHead(200, { 'content-type': types[path.extname(p)] || 'application/octet-stream' }); r.end(d); }); }).listen(0);
+const port = srv.address().port;
+const b = await chromium.launch(); const pg = await b.newPage({ viewport: { width: 1100, height: 800 } });
+pg.on('console', m => console.log('console:', m.text())); pg.on('pageerror', e => console.log('ERROR:', e.message));
+await pg.goto(`http://localhost:${port}/${process.argv[2]}`);
+await pg.waitForFunction(() => document.title.startsWith('done'), null, { timeout: 120000 });
+console.log(await pg.title());
+await pg.screenshot({ path: process.argv[3] });
+await b.close(); srv.close();

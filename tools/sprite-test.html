@@ -1,0 +1,13 @@
+<!doctype html><body style="margin:0;background:#333"><canvas id="screen" width="256" height="224" style="display:none"></canvas><canvas id="out" width="640" height="400" style="image-rendering:pixelated;width:1280px"></canvas>
+<script type="module">
+import { buildCreatures } from '../src/art/creatures.js';
+import { buildObjects, buildGear } from '../src/art/world.js';
+const t=performance.now(); const c=buildCreatures(); const o=buildObjects(); const g=buildGear(40,16,'#8a6a40'); const dt=performance.now()-t;
+const ctx=document.getElementById('out').getContext('2d'); ctx.fillStyle='#6a8a9a'; ctx.fillRect(0,0,640,400);
+let x=2,y=2,rowH=0; const put=f=>{ if(x+f.width>640){x=2;y+=rowH+2;rowH=0;} ctx.drawImage(f,x,y); x+=f.width+2; rowH=Math.max(rowH,f.height); };
+for(const k in c.enemy){ for(const a in c.enemy[k].R) put(c.enemy[k].R[a][0]); }
+for(const k in o){ const v=o[k]; put(Array.isArray(v)?v[0]:v); }
+for(const k in c.boss){ for(const a in c.boss[k].R) put(c.boss[k].R[a][0]); }
+put(g);
+document.title='done '+dt.toFixed(0);
+</script>
