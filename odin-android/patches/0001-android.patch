@@ -83,7 +83,7 @@ index e034434..338ea2e 100644
  	RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
  target_include_directories(odin PRIVATE src)
 diff --git a/src/odin/host/app/main.cpp b/src/odin/host/app/main.cpp
-index 1a4e66f..0126930 100644
+index 1a4e66f..c409baa 100644
 --- a/src/odin/host/app/main.cpp
 +++ b/src/odin/host/app/main.cpp
 @@ -49,6 +49,12 @@
@@ -99,13 +99,16 @@ index 1a4e66f..0126930 100644
  namespace odin {
  namespace {
  
-@@ -276,6 +282,10 @@ main(int argc, char **argv)
+@@ -276,6 +282,13 @@ main(int argc, char **argv)
  	odin::Options options;
  	odin::GameList games;
  
 +#if defined(__ANDROID__)
 +	/* The back key comes as a key (the touch pad makes it Escape) */
 +	SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
++	/* Either way up, as the phone is held (the lock of the rotation kept):
++	 * the menus and the touch pad lay themselves out for the window */
++	SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait");
 +#endif
  	/* With the OpenGL driver of Intel loaded, a process of Windows ends
  	 * without what its buffers still hold: it goes out here. */

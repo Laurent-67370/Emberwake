@@ -6,6 +6,6 @@
     </style>
     <style name="OdinTheme.Game" parent="android:Theme.DeviceDefault.NoActionBar.Fullscreen">
         <item name="android:windowBackground">@android:color/black</item>
-        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">never</item>
     </style>
 </resources>

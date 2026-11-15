@@ -11,9 +11,11 @@ on:
 permissions:
   contents: write
 
+# The runs that publish odin.apk go one after the other, the newest last:
+# a run that ends late no longer puts an older APK back
 concurrency:
-  group: odin-android-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && format('odin-android-pr-{0}', github.ref) || 'odin-android-publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
