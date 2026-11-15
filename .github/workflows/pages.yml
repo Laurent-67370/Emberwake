@@ -3,7 +3,7 @@ name: Web (GitHub Pages)
 on:
   push:
     branches: ['main', 'claude/regenerate-video-game-code-f0xg92']
-    paths: ['index.html', 'src/**', '.github/workflows/pages.yml']
+    paths: ['index.html', 'src/**', 'manifest.webmanifest', 'icon.svg', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
       - name: Collect the game files
         run: |
           mkdir -p site
-          cp index.html site/
+          cp index.html manifest.webmanifest icon.svg site/
           cp -r src site/
           touch site/.nojekyll
       - uses: actions/configure-pages@v5

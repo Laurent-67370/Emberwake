@@ -1,0 +1,10 @@
+{
+  "name": "Sunkeeper — La cloche du dernier soleil",
+  "short_name": "Sunkeeper",
+  "start_url": "./index.html",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#07060c",
+  "theme_color": "#07060c",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

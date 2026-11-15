@@ -35,7 +35,7 @@ android {
 // copied into the APK's assets at build time so there is a single source.
 val copyGame by tasks.registering(Copy::class) {
     from(rootProject.projectDir.parentFile) {
-        include("index.html", "src/**")
+        include("index.html", "manifest.webmanifest", "icon.svg", "src/**")
     }
     into(layout.buildDirectory.dir("generated/gameAssets/game"))
 }
