@@ -1,7 +1,7 @@
 // Boot: build every asset (in slices so the loading bar animates), then run
 // the game at a fixed 60 Hz like the console's NTSC frame.
 import { ctx, W, H, present, regs } from './ppu.js';
-import { poll, setupTouch, pressed, bot } from './input.js';
+import { poll, setupTouch, pressed, held, bot, onFirstTouch } from './input.js';
 import { initAudio, setMuted, state as audioState } from './audio.js';
 import { G, newSave } from './state.js';
 import { text } from './gfx.js';
@@ -66,6 +66,7 @@ function tick() {
 }
 requestAnimationFrame(frame);
 setupTouch();
+onFirstTouch(() => initAudio());
 
 addEventListener('keydown', e => {
   if (e.code === 'KeyF') { const el = document.documentElement; if (!document.fullscreenElement) el.requestFullscreen?.(); else document.exitFullscreen?.(); }
@@ -76,7 +77,7 @@ addEventListener('pointerdown', () => initAudio(), { once: false });
 
 // --- test hooks for the play-testing bot (tools/playtest.mjs) -----------------
 window.__game = {
-  G, bot, perf, REALMS,
+  G, bot, perf, REALMS, held, pressed,
   ready: () => booted,
   start(ri, mode = 'stage', abilities = null) {
     G.save = newSave();

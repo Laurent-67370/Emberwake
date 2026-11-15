@@ -68,11 +68,12 @@ export class Player {
     }
     // ---- horizontal
     const maxV = this.inWater ? K.waterRun : K.run;
-    if (!this.atk || !this.onGround || this.atk === 'air' || this.atk === 'up' || this.atk === 'down') {
+    if (!this.atk || !this.onGround || this.atk === 'air' || this.atk === 'up' || this.atk === 'down' || (this.atk !== 'slash3' && dir === this.face)) {
+      const cap = this.atk && this.onGround ? maxV * 0.75 : maxV; // walk forward while slashing
       if (dir) {
         const acc = this.onGround ? K.accG : K.accA;
         if (Math.sign(this.vx) !== dir && this.vx !== 0) this.vx = approach(this.vx, 0, this.onGround ? K.decG + acc : acc);
-        this.vx = approach(this.vx, dir * maxV, acc);
+        this.vx = approach(this.vx, dir * cap, acc);
         if (!this.atk) this.face = dir;
       } else this.vx = approach(this.vx, 0, this.onGround ? K.decG : K.decA);
     } else this.vx = approach(this.vx, 0, 0.35);
