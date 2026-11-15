@@ -1,0 +1,917 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index e034434..ee86cb6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -16,6 +16,10 @@ include(GNUInstallDirs)
+ option(ODIN_NATIVE "Tune for this machine's CPU (-march=native)" ON)
+ option(ODIN_LTO "Link-time optimisation (-flto)" ON)
+ option(ODIN_GLES "Use OpenGL ES for embedded systems" OFF)
++# Android: OpenGL ES (and Vulkan), the program a library SDL's activity loads
++if(ANDROID)
++	set(ODIN_GLES ON CACHE BOOL "Use OpenGL ES for embedded systems" FORCE)
++endif()
+ set(ODIN_OPT_FLAGS "-O3 -fomit-frame-pointer -fno-stack-protector" CACHE STRING
+ 	"Optimisation flags")
+ set(ODIN_PGO "" CACHE STRING "Profile-guided build: generate or use")
+@@ -119,18 +123,25 @@ function(odin_library name folder target)
+ 	message(STATUS "${ARGN}: from 3rdparty/${folder}")
+ endfunction()
+ 
+-if(ODIN_GLES AND NOT (UNIX AND NOT APPLE))
++if(ODIN_GLES AND NOT (UNIX AND NOT APPLE) AND NOT ANDROID)
+ 	message(FATAL_ERROR "ODIN_GLES is for Linux")
+ endif()
+ find_package(PkgConfig QUIET)
+ 
+-set(SDL_SHARED OFF)
+-set(SDL_STATIC ON)
+ set(SDL_TEST_LIBRARY OFF)
+ set(SDL_TESTS OFF)
+ set(SDL_EXAMPLES OFF)
+ set(SDL_INSTALL OFF)
+-odin_library(sdl SDL SDL3::SDL3-static sdl3)
++if(ANDROID)
++	# libSDL3.so, which SDL's activity loads before libmain.so
++	set(SDL_SHARED ON)
++	set(SDL_STATIC OFF)
++	odin_library(sdl SDL SDL3::SDL3-shared sdl3)
++else()
++	set(SDL_SHARED OFF)
++	set(SDL_STATIC ON)
++	odin_library(sdl SDL SDL3::SDL3-static sdl3)
++endif()
+ 
+ set(JANSSON_BUILD_SHARED_LIBS OFF)
+ set(JANSSON_EXAMPLES OFF)
+@@ -180,6 +191,8 @@ target_link_libraries(odin_deps INTERFACE odin_jansson odin_vulkan_headers)
+ if(APPLE)
+ 	target_link_libraries(odin_deps INTERFACE odin_glew "-framework OpenGL")
+ 	set(HOST_WARN_FLAGS -Wno-sign-conversion)
++elseif(ANDROID)
++	target_link_libraries(odin_deps INTERFACE GLESv3 EGL android log)
+ elseif(UNIX AND ODIN_GLES)
+ 	odin_system_only(gles glesv2)
+ 	odin_system_only(x11 x11)
+@@ -221,7 +234,7 @@ set(ODIN_SOURCES
+ 	host/ui/folder_dialog.cpp host/ui/pad_view.cpp
+ 	host/ui/pad_drawings.cpp host/ui/pad_drawings_al2009man.cpp
+ 	host/ui/gun_drawings.cpp
+-	host/input/keyboard.cpp host/app/log_file.cpp
++	host/input/keyboard.cpp host/input/touch_pad.cpp host/app/log_file.cpp
+ 	host/app/version.cpp host/app/hotkeys.cpp host/input/controls.cpp
+ 	host/input/pointers.cpp host/input/wheel_force.cpp host/input/gun_serial.cpp
+ 	host/input/evdev.cpp host/input/rawinput.cpp
+@@ -429,8 +442,16 @@ set_source_files_properties(src/odin/host/app/rom_files.cpp PROPERTIES
+ set_source_files_properties(src/odin/host/gfx/host_graphics_vk.cpp PROPERTIES
+ 	COMPILE_DEFINITIONS "${VULKAN_FLAGS}")
+ 
+-add_executable(odin ${ODIN_SOURCES}
+-	$<TARGET_OBJECTS:odin_imgui> $<TARGET_OBJECTS:odin_archive> $<TARGET_OBJECTS:odin_embedded>)
++if(ANDROID)
++	add_library(odin SHARED ${ODIN_SOURCES}
++		$<TARGET_OBJECTS:odin_imgui> $<TARGET_OBJECTS:odin_archive> $<TARGET_OBJECTS:odin_embedded>)
++	set_target_properties(odin PROPERTIES OUTPUT_NAME main)
++	# Pages of 16 KB (Android 15 and later)
++	target_link_options(odin PRIVATE -Wl,-z,max-page-size=16384)
++else()
++	add_executable(odin ${ODIN_SOURCES}
++		$<TARGET_OBJECTS:odin_imgui> $<TARGET_OBJECTS:odin_archive> $<TARGET_OBJECTS:odin_embedded>)
++endif()
+ set_target_properties(odin PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
+ 	RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+ target_include_directories(odin PRIVATE src)
+diff --git a/src/odin/host/app/main.cpp b/src/odin/host/app/main.cpp
+index 1a4e66f..0126930 100644
+--- a/src/odin/host/app/main.cpp
++++ b/src/odin/host/app/main.cpp
+@@ -49,6 +49,12 @@
+ #include "odin/host/app/user_files.hpp"
+ #include "odin/host/app/version.hpp"
+ 
++#if defined(__ANDROID__)
++/* SDL's activity calls SDL_main in the library */
++#include <SDL3/SDL_hints.h>
++#include <SDL3/SDL_main.h>
++#endif
++
+ namespace odin {
+ namespace {
+ 
+@@ -276,6 +282,10 @@ main(int argc, char **argv)
+ 	odin::Options options;
+ 	odin::GameList games;
+ 
++#if defined(__ANDROID__)
++	/* The back key comes as a key (the touch pad makes it Escape) */
++	SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
++#endif
+ 	/* With the OpenGL driver of Intel loaded, a process of Windows ends
+ 	 * without what its buffers still hold: it goes out here. */
+ 	std::atexit([] { std::fflush(nullptr); });
+diff --git a/src/odin/host/app/options.hpp b/src/odin/host/app/options.hpp
+index 31918b5..3ac4953 100644
+--- a/src/odin/host/app/options.hpp
++++ b/src/odin/host/app/options.hpp
+@@ -48,7 +48,7 @@ inline constexpr const char *VSYNCS[] = { "off", "on", "adaptive" };
+ inline constexpr DisplaySides SIDES = DisplaySides::BEZEL;
+ inline constexpr const char *SIDES_NAMES[] = { "off", "blur", "image" };
+ /* The graphics API by default, and the names of odin.ini */
+-#if defined(__APPLE__)
++#if defined(__APPLE__) || defined(__ANDROID__)
+ inline constexpr DisplayApi API = DisplayApi::VULKAN;
+ #else
+ inline constexpr DisplayApi API = DisplayApi::OPENGL;
+diff --git a/src/odin/host/app/session.cpp b/src/odin/host/app/session.cpp
+index 094c084..af43055 100644
+--- a/src/odin/host/app/session.cpp
++++ b/src/odin/host/app/session.cpp
+@@ -26,6 +26,7 @@
+  */
+ 
+ #include "odin/host/app/session.hpp"
++#include "odin/host/input/touch_pad.hpp"
+ 
+ #include <cstdio>
+ #include <filesystem>
+@@ -481,7 +482,7 @@ Session::frames()
+ 			m_audio->play(m_board.sound(false), m_board.sound(true));
+ 
+ 		/* The bar, or a note alone, over the frame */
+-		const bool bar = m_display.bar_shown(), over = bar || !m_bar.note.empty();
++		const bool bar = m_display.bar_shown(), over = bar || !m_bar.note.empty() || touch_pad_wanted();
+ 
+ 		if (over)
+ 			fill_bar();
+diff --git a/src/odin/host/app/user_files.cpp b/src/odin/host/app/user_files.cpp
+index 6990a0c..c8f98d8 100644
+--- a/src/odin/host/app/user_files.cpp
++++ b/src/odin/host/app/user_files.cpp
+@@ -44,7 +44,7 @@ namespace odin {
+ namespace {
+ 
+ /* The folder of the executable of Odin; empty when it cannot be told */
+-std::string
++[[maybe_unused]] std::string
+ executable_folder()
+ {
+ 	std::error_code error;
+@@ -75,6 +75,39 @@ executable_folder()
+ 
+ } /* namespace */
+ 
++#if defined(__ANDROID__)
++/* Android: the folder the activity chose (shared storage, Odin/), where the
++ * roms, the artwork, the settings and the log are; the data of the APK
++ * (odin-games.json, the filters) unpacked by the activity in its own */
++std::string
++program_folder()
++{
++	return env_text("ODIN_ANDROID_FOLDER");
++}
++
++std::vector<std::string>
++program_data_folders()
++{
++	std::vector<std::string> folders;
++
++	for (const char *variable : { "ODIN_ANDROID_DATA", "ODIN_ANDROID_FOLDER" })
++		if (const std::string folder = env_text(variable); !folder.empty())
++			folders.push_back(folder);
++	return folders;
++}
++
++std::string
++user_data_dir()
++{
++	return program_folder();
++}
++
++std::string
++portable_folder()
++{
++	return program_folder();
++}
++#else
+ std::string
+ program_folder()
+ {
+@@ -130,6 +163,7 @@ portable_folder()
+ 			return folder;
+ 	return {};
+ }
++#endif
+ 
+ std::string
+ odin_data_dir()
+diff --git a/src/odin/host/input/controls.cpp b/src/odin/host/input/controls.cpp
+index c4acd40..2f94263 100644
+--- a/src/odin/host/input/controls.cpp
++++ b/src/odin/host/input/controls.cpp
+@@ -23,6 +23,7 @@
+  */
+ 
+ #include "odin/host/input/controls.hpp"
++#include "odin/host/input/touch_pad.hpp"
+ #include "odin/host/input/wheels.hpp"
+ 
+ #include "odin/host/audio/audio_out.hpp"
+@@ -170,6 +171,7 @@ Controls::Controls(Keyboard &keys, const std::vector<GameControl> &controls, con
+ 		return;
+ 	}
+ 	m_on = true;
++	touch_pad_attach();
+ 	follow_cursor();
+ }
+ 
+@@ -201,6 +203,7 @@ Controls::~Controls()
+ 		SDL_CloseGamepad(pad.handle);
+ 	for (Joy &joy : m_joys)
+ 		SDL_CloseJoystick(joy.handle);
++	touch_pad_detach();
+ 	SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+ }
+ 
+diff --git a/src/odin/host/input/evdev.cpp b/src/odin/host/input/evdev.cpp
+index d01c7d4..ae0550d 100644
+--- a/src/odin/host/input/evdev.cpp
++++ b/src/odin/host/input/evdev.cpp
+@@ -32,7 +32,7 @@
+ #include "odin/host/input/pointer_names.hpp"
+ #include "odin/host/input/seats.hpp"
+ 
+-#ifdef __linux__
++#if defined(__linux__) && !defined(__ANDROID__)
+ 
+ #include <algorithm>
+ #include <array>
+diff --git a/src/odin/host/input/pointers.cpp b/src/odin/host/input/pointers.cpp
+index 3cad3b1..b54f8d8 100644
+--- a/src/odin/host/input/pointers.cpp
++++ b/src/odin/host/input/pointers.cpp
+@@ -27,7 +27,7 @@
+ 
+ #include "odin/host/input/pointers.hpp"
+ 
+-#if !defined(__linux__) && !defined(_WIN32)
++#if (!defined(__linux__) && !defined(_WIN32)) || defined(__ANDROID__)
+ 
+ namespace odin {
+ 
+diff --git a/src/odin/host/input/touch_pad.cpp b/src/odin/host/input/touch_pad.cpp
+new file mode 100644
+index 0000000..325e737
+--- /dev/null
++++ b/src/odin/host/input/touch_pad.cpp
+@@ -0,0 +1,448 @@
++/*
++ *  ██████╗ ██████╗ ██╗███╗   ██╗
++ * ██╔═══██╗██╔══██╗██║████╗  ██║
++ * ██║   ██║██║  ██║██║██╔██╗ ██║
++ * ██║   ██║██║  ██║██║██║╚██╗██║
++ * ╚██████╔╝██████╔╝██║██║ ╚████║
++ *  ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═══╝
++ *
++ * Copyright (C) 2026 Réda Chérif-Touil
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "odin/host/input/touch_pad.hpp"
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <cmath>
++#include <cstdio>
++#include <mutex>
++
++#include <SDL3/SDL.h>
++
++#include "imgui/imgui.h"
++
++namespace odin {
++
++namespace {
++
++/* What a finger may hold */
++enum Part : int {
++	NOTHING = -1,
++	STICK = 0,
++	BUTTON_A, BUTTON_B, BUTTON_X, BUTTON_Y,
++	SHOULDER_L, SHOULDER_R, TRIGGER_L, TRIGGER_R,
++	START, COIN, MENU,
++	PARTS
++};
++
++constexpr const char *LABELS[PARTS] = { "", "A", "B", "X", "Y", "LB", "RB", "LT", "RT", "START", "COIN", "MENU" };
++
++/* The SDL button each part presses (none for the stick and the triggers) */
++constexpr int BUTTONS[PARTS] = {
++	-1,
++	SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_WEST, SDL_GAMEPAD_BUTTON_NORTH,
++	SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, -1, -1,
++	SDL_GAMEPAD_BUTTON_START, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_GUIDE,
++};
++
++/* A round or a rounded box, in the points of the window */
++struct Shape {
++	float x = 0, y = 0;	/* centre */
++	float w = 0, h = 0;	/* a round when h is 0: w its radius */
++
++	bool round() const { return h <= 0.0f; }
++	bool hit(float px, float py, float slack) const
++	{
++		if (round())
++			return std::hypot(px - x, py - y) <= w * slack;
++		return std::fabs(px - x) <= w * 0.5f * slack && std::fabs(py - y) <= h * 0.5f * slack;
++	}
++};
++
++struct Finger {
++	SDL_FingerID id = 0;
++	Part part = NOTHING;
++	float x = 0, y = 0;	/* points */
++};
++
++/* Shared between the thread that sends the touches (Android's) and the one
++ * that runs Odin */
++struct State {
++	std::mutex mutex;
++	std::array<Finger, 10> fingers{};
++	std::array<Shape, PARTS> shapes{};
++	float room_w = 0, room_h = 0;	/* the window, in points, when drawn */
++	SDL_JoystickID id = 0;
++	int users = 0;	/* the Controls that plugged it */
++	bool watching = false;
++	/* The touch that came as the mouse began on the pad: its mouse events
++	 * are the pad's */
++	bool mouse_taken = false;
++};
++
++State g_state;
++std::atomic<Uint64> g_drawn_ns{ 0 };
++std::atomic<bool> g_hidden{ false };
++
++constexpr Uint64 SHOWN_NS = 250'000'000;
++
++bool
++shown()
++{
++	const Uint64 drawn = g_drawn_ns.load();
++
++	return drawn && SDL_GetTicksNS() - drawn < SHOWN_NS && !g_hidden.load();
++}
++
++/* The parts laid out for a window of w by h points, landscape or not */
++void
++lay_out(std::array<Shape, PARTS> &s, float w, float h)
++{
++	const float u = std::min(w, h);
++	const float stick = 0.16f * u, button = 0.075f * u, gap = 0.135f * u;
++	const float face_x = w - 0.24f * u, face_y = h - 0.30f * u;
++
++	s[STICK] = { 0.25f * u, h - 0.28f * u, stick, 0 };
++	s[BUTTON_A] = { face_x, face_y + gap, button, 0 };
++	s[BUTTON_B] = { face_x + gap, face_y, button, 0 };
++	s[BUTTON_X] = { face_x - gap, face_y, button, 0 };
++	s[BUTTON_Y] = { face_x, face_y - gap, button, 0 };
++
++	const float bw = 0.22f * u, bh = 0.10f * u, top = 0.10f * u;
++
++	s[TRIGGER_L] = { 0.04f * u + bw * 0.5f, top + bh * 0.5f, bw, bh };
++	s[SHOULDER_L] = { 0.04f * u + bw * 0.5f, top + bh * 1.75f, bw, bh };
++	s[TRIGGER_R] = { w - 0.04f * u - bw * 0.5f, top + bh * 0.5f, bw, bh };
++	s[SHOULDER_R] = { w - 0.04f * u - bw * 0.5f, top + bh * 1.75f, bw, bh };
++
++	const float sw = 0.17f * u, sh = 0.075f * u;
++
++	s[COIN] = { w * 0.5f - sw * 0.65f, h - 0.07f * u, sw, sh };
++	s[START] = { w * 0.5f + sw * 0.65f, h - 0.07f * u, sw, sh };
++	s[MENU] = { w * 0.5f, 0.06f * u, sw, sh };
++}
++
++/* The part under a point; the stick reaches further than it is drawn */
++Part
++part_at(const std::array<Shape, PARTS> &s, float x, float y)
++{
++	for (int p = BUTTON_A; p < PARTS; p++)
++		if (s[static_cast<size_t>(p)].hit(x, y, 1.15f))
++			return static_cast<Part>(p);
++	if (s[STICK].hit(x, y, 1.7f))
++		return STICK;
++	return NOTHING;
++}
++
++Finger *
++finger_of(SDL_FingerID id)
++{
++	for (Finger &f : g_state.fingers)
++		if (f.part != NOTHING && f.id == id)
++			return &f;
++	return nullptr;
++}
++
++/* The touches, as they come (the thread that sends them); the mouse that
++ * a touch on the pad makes swallowed, the back key of Android made the
++ * Escape of Odin's menu */
++bool SDLCALL
++filter(void *, SDL_Event *event)
++{
++	switch (event->type) {
++	case SDL_EVENT_KEY_DOWN:
++	case SDL_EVENT_KEY_UP:
++		if (event->key.key == SDLK_AC_BACK) {
++			event->key.key = SDLK_ESCAPE;
++			event->key.scancode = SDL_SCANCODE_ESCAPE;
++		}
++		return true;
++	case SDL_EVENT_FINGER_DOWN:
++	case SDL_EVENT_FINGER_MOTION:
++	case SDL_EVENT_FINGER_UP:
++	case SDL_EVENT_FINGER_CANCELED: {
++		if (event->tfinger.touchID == SDL_MOUSE_TOUCHID)
++			return true;
++
++		const std::lock_guard<std::mutex> lock(g_state.mutex);
++		const float x = event->tfinger.x * g_state.room_w, y = event->tfinger.y * g_state.room_h;
++		Finger *f = finger_of(event->tfinger.fingerID);
++
++		if (event->type == SDL_EVENT_FINGER_DOWN) {
++			const Part part = shown() ? part_at(g_state.shapes, x, y) : NOTHING;
++
++			if (part == NOTHING || f)
++				return true;
++			for (Finger &free : g_state.fingers)
++				if (free.part == NOTHING) {
++					free = { event->tfinger.fingerID, part, x, y };
++					break;
++				}
++		} else if (f && event->type == SDL_EVENT_FINGER_MOTION) {
++			f->x = x;
++			f->y = y;
++			/* A finger slides from button to button, not off the stick */
++			if (f->part != STICK) {
++				const Part part = part_at(g_state.shapes, x, y);
++
++				if (part != NOTHING && part != STICK)
++					f->part = part;
++			}
++		} else if (f) {
++			f->part = NOTHING;
++		}
++		return true;
++	}
++	case SDL_EVENT_MOUSE_BUTTON_DOWN:
++	case SDL_EVENT_MOUSE_BUTTON_UP:
++	case SDL_EVENT_MOUSE_MOTION: {
++		if (event->type == SDL_EVENT_MOUSE_MOTION ? event->motion.which != SDL_TOUCH_MOUSEID :
++		                                            event->button.which != SDL_TOUCH_MOUSEID)
++			return true;
++
++		const std::lock_guard<std::mutex> lock(g_state.mutex);
++
++		if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN)
++			g_state.mouse_taken = shown() && part_at(g_state.shapes, event->button.x, event->button.y) != NOTHING;
++		const bool taken = g_state.mouse_taken;
++		if (event->type == SDL_EVENT_MOUSE_BUTTON_UP)
++			g_state.mouse_taken = false;
++		return !taken;
++	}
++	default:
++		return true;
++	}
++}
++
++/* The fingers given to the pad (Odin's thread, as SDL updates the
++ * joysticks) */
++void SDLCALL
++update(void *)
++{
++	std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> buttons{};
++	float stick_x = 0, stick_y = 0;
++	bool trigger_l = false, trigger_r = false;
++	SDL_JoystickID id;
++	{
++		const std::lock_guard<std::mutex> lock(g_state.mutex);
++		const bool on = shown();
++
++		id = g_state.id;
++		for (Finger &f : g_state.fingers) {
++			if (f.part == NOTHING)
++				continue;
++			if (!on) {
++				f.part = NOTHING;
++				continue;
++			}
++			if (f.part == STICK) {
++				const Shape &s = g_state.shapes[STICK];
++				float dx = (f.x - s.x) / s.w, dy = (f.y - s.y) / s.w;
++				const float length = std::hypot(dx, dy);
++
++				if (length > 1.0f) {
++					dx /= length;
++					dy /= length;
++				}
++				stick_x = dx;
++				stick_y = dy;
++			} else if (f.part == TRIGGER_L) {
++				trigger_l = true;
++			} else if (f.part == TRIGGER_R) {
++				trigger_r = true;
++			} else if (BUTTONS[f.part] >= 0) {
++				buttons[static_cast<size_t>(BUTTONS[f.part])] = true;
++			}
++		}
++	}
++	SDL_Joystick *const joystick = SDL_GetJoystickFromID(id);
++
++	if (!joystick)
++		return;
++	/* Hidden while another gamepad is plugged in, looked at twice a second */
++	static Uint64 looked = 0;
++	if (const Uint64 now = SDL_GetTicksNS(); now - looked > 500'000'000) {
++		int count = 0;
++		bool other = false;
++
++		looked = now;
++		if (SDL_JoystickID *const pads = SDL_GetGamepads(&count)) {
++			for (int i = 0; i < count; i++)
++				other = other || (pads[i] != id && !SDL_IsJoystickVirtual(pads[i]));
++			SDL_free(pads);
++		}
++		g_hidden = other;
++	}
++	const auto axis = [](float v) { return static_cast<Sint16>(std::clamp(v, -1.0f, 1.0f) * 32767.0f); };
++
++	SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, axis(stick_x));
++	SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTY, axis(stick_y));
++	SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, trigger_l ? 32767 : 0);
++	SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, trigger_r ? 32767 : 0);
++	for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; b++)
++		SDL_SetJoystickVirtualButton(joystick, b, buttons[static_cast<size_t>(b)]);
++}
++
++} /* namespace */
++
++bool
++touch_pad_wanted()
++{
++#if defined(__ANDROID__)
++	return !SDL_GetHintBoolean("ODIN_NO_TOUCH_PAD", false) && !SDL_getenv("ODIN_NO_TOUCH_PAD");
++#else
++	return SDL_getenv("ODIN_TOUCH_PAD") != nullptr;
++#endif
++}
++
++void
++touch_pad_attach()
++{
++	if (!touch_pad_wanted())
++		return;
++
++	const std::lock_guard<std::mutex> lock(g_state.mutex);
++
++	if (!g_state.watching) {
++		SDL_SetEventFilter(filter, nullptr);
++		g_state.watching = true;
++	}
++	if (g_state.users++ > 0 && g_state.id)
++		return;
++
++	SDL_VirtualJoystickDesc desc;
++
++	SDL_INIT_INTERFACE(&desc);
++	desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
++	desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
++	desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
++	desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_LEFTX) | (1u << SDL_GAMEPAD_AXIS_LEFTY) |
++	                 (1u << SDL_GAMEPAD_AXIS_LEFT_TRIGGER) | (1u << SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
++	desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_SOUTH) | (1u << SDL_GAMEPAD_BUTTON_EAST) |
++	                   (1u << SDL_GAMEPAD_BUTTON_WEST) | (1u << SDL_GAMEPAD_BUTTON_NORTH) |
++	                   (1u << SDL_GAMEPAD_BUTTON_BACK) | (1u << SDL_GAMEPAD_BUTTON_GUIDE) |
++	                   (1u << SDL_GAMEPAD_BUTTON_START) | (1u << SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) |
++	                   (1u << SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
++	desc.name = "Odin touch pad";
++	desc.Update = update;
++	g_state.id = SDL_AttachVirtualJoystick(&desc);
++	if (!g_state.id)
++		std::fprintf(stderr, "ERROR: touch pad: %s\n", SDL_GetError());
++	else
++		std::printf("touch pad: plugged\n");
++}
++
++void
++touch_pad_detach()
++{
++	if (!touch_pad_wanted())
++		return;
++
++	SDL_JoystickID id;
++	{
++		const std::lock_guard<std::mutex> lock(g_state.mutex);
++
++		if (g_state.users > 0 && --g_state.users > 0)
++			return;
++		id = g_state.id;
++		g_state.id = 0;
++		for (Finger &f : g_state.fingers)
++			f.part = NOTHING;
++	}
++	if (id)
++		SDL_DetachVirtualJoystick(id);
++}
++
++void
++touch_pad_draw()
++{
++	if (!touch_pad_wanted() || !ImGui::GetCurrentContext())
++		return;
++
++	const ImVec2 room = ImGui::GetIO().DisplaySize;
++	std::array<Shape, PARTS> shapes;
++	std::array<bool, PARTS> held{};
++	ImVec2 knob;
++	bool connected;
++	{
++		const std::lock_guard<std::mutex> lock(g_state.mutex);
++
++		g_state.room_w = room.x;
++		g_state.room_h = room.y;
++		lay_out(g_state.shapes, room.x, room.y);
++		shapes = g_state.shapes;
++		connected = g_state.id != 0;
++		knob = { shapes[STICK].x, shapes[STICK].y };
++		for (const Finger &f : g_state.fingers) {
++			if (f.part == NOTHING)
++				continue;
++			held[static_cast<size_t>(f.part)] = true;
++			if (f.part == STICK) {
++				const Shape &s = shapes[STICK];
++				float dx = f.x - s.x, dy = f.y - s.y;
++				const float length = std::hypot(dx, dy);
++
++				if (length > s.w) {
++					dx *= s.w / length;
++					dy *= s.w / length;
++				}
++				knob = { s.x + dx, s.y + dy };
++			}
++		}
++	}
++	if (!connected)
++		return;
++	g_drawn_ns = SDL_GetTicksNS();
++	if (g_hidden.load())
++		return;
++
++	ImDrawList *const draw = ImGui::GetForegroundDrawList();
++	const ImU32 fill = IM_COL32(255, 255, 255, 40), pressed = IM_COL32(255, 255, 255, 110);
++	const ImU32 line = IM_COL32(255, 255, 255, 120), text = IM_COL32(255, 255, 255, 190);
++	const float thick = std::max(1.5f, std::min(room.x, room.y) * 0.004f);
++	ImFont *const font = ImGui::GetFont();
++
++	for (int p = 0; p < PARTS; p++) {
++		const Shape &s = shapes[static_cast<size_t>(p)];
++		const ImU32 inside = held[static_cast<size_t>(p)] ? pressed : fill;
++
++		if (p == STICK) {
++			draw->AddCircleFilled({ s.x, s.y }, s.w, IM_COL32(255, 255, 255, 25), 48);
++			draw->AddCircle({ s.x, s.y }, s.w, line, 48, thick);
++			draw->AddCircleFilled(knob, s.w * 0.45f, inside, 32);
++			draw->AddCircle(knob, s.w * 0.45f, line, 32, thick);
++			continue;
++		}
++		float size;
++		if (s.round()) {
++			draw->AddCircleFilled({ s.x, s.y }, s.w, inside, 32);
++			draw->AddCircle({ s.x, s.y }, s.w, line, 32, thick);
++			size = s.w * 0.9f;
++		} else {
++			const ImVec2 a{ s.x - s.w * 0.5f, s.y - s.h * 0.5f }, b{ s.x + s.w * 0.5f, s.y + s.h * 0.5f };
++
++			draw->AddRectFilled(a, b, inside, s.h * 0.35f);
++			draw->AddRect(a, b, line, s.h * 0.35f, 0, thick);
++			size = s.h * 0.55f;
++		}
++		const ImVec2 extent = font->CalcTextSizeA(size, 1e9f, 0.0f, LABELS[p]);
++
++		draw->AddText(font, size, { s.x - extent.x * 0.5f, s.y - extent.y * 0.5f }, text, LABELS[p]);
++	}
++}
++
++} /* namespace odin */
+diff --git a/src/odin/host/input/touch_pad.hpp b/src/odin/host/input/touch_pad.hpp
+new file mode 100644
+index 0000000..86ff2fc
+--- /dev/null
++++ b/src/odin/host/input/touch_pad.hpp
+@@ -0,0 +1,47 @@
++/*
++ *  ██████╗ ██████╗ ██╗███╗   ██╗
++ * ██╔═══██╗██╔══██╗██║████╗  ██║
++ * ██║   ██║██║  ██║██║██╔██╗ ██║
++ * ██║   ██║██║  ██║██║██║╚██╗██║
++ * ╚██████╔╝██████╔╝██║██║ ╚████║
++ *  ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═══╝
++ *
++ * Copyright (C) 2026 Réda Chérif-Touil
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef ODIN_TOUCH_PAD_HPP
++#define ODIN_TOUCH_PAD_HPP
++
++namespace odin {
++
++/* A gamepad on the touch screen (Android; elsewhere with ODIN_TOUCH_PAD=1):
++ * an SDL virtual gamepad that the fingers press, drawn over the game.
++ * Controls sees it as any other pad.
++ *
++ * touch_pad_attach: the pad plugged, once the gamepads are on (Controls);
++ * touch_pad_detach: unplugged, before they go off.
++ * touch_pad_draw: its drawing added to the frame of Dear ImGui being built
++ * over the game; the fingers work it only while it is drawn, and the touches
++ * on it do not reach the game as the mouse.
++ * touch_pad_wanted: whether this host has one. */
++bool touch_pad_wanted();
++void touch_pad_attach();
++void touch_pad_detach();
++void touch_pad_draw();
++
++} /* namespace odin */
++
++#endif /* ODIN_TOUCH_PAD_HPP */
+diff --git a/src/odin/host/ui/folder_dialog.cpp b/src/odin/host/ui/folder_dialog.cpp
+index b1bc982..e9308b3 100644
+--- a/src/odin/host/ui/folder_dialog.cpp
++++ b/src/odin/host/ui/folder_dialog.cpp
+@@ -48,7 +48,7 @@ struct Asked {
+ };
+ 
+ /* Read by the picker until it answers */
+-constexpr SDL_DialogFileFilter ARCHIVES[] = { { "MAME game archives (zip, 7z)", "zip;7z" } };
++[[maybe_unused]] constexpr SDL_DialogFileFilter ARCHIVES[] = { { "MAME game archives (zip, 7z)", "zip;7z" } };
+ 
+ /* Where the picker opens: the folder when it is there */
+ const char *
+@@ -100,6 +100,36 @@ FolderDialog::start()
+ 	return true;
+ }
+ 
++#if defined(__ANDROID__)
++/* Android: the pickers of the system answer with content:// addresses, not
++ * paths. Odin reads its folder of the shared storage (Odin/), all files
++ * allowed: the folder asked is the one given, else Odin/roms. */
++void
++FolderDialog::ask(SDL_Window *window, const std::string &from, int asked)
++{
++	(void)window;
++	if (!start())
++		return;
++
++	const char *const at = start_at(from);
++	const char *const odin = SDL_getenv("ODIN_ANDROID_FOLDER");
++	const std::string folder = at ? std::string(at) : std::string(odin ? odin : "") + "/roms";
++	const char *const files[2] = { folder.c_str(), nullptr };
++
++	answered(new Asked{ m_slot, asked }, files, 0);
++}
++
++void
++FolderDialog::ask_archive(SDL_Window *window, const std::string &from, int asked)
++{
++	(void)window;
++	(void)from;
++	if (!start())
++		return;
++	SDL_SetError("on Android, put the archives in the folder Odin/roms of the phone");
++	answered(new Asked{ m_slot, asked }, nullptr, 0);
++}
++#else
+ void
+ FolderDialog::ask(SDL_Window *window, const std::string &from, int asked)
+ {
+@@ -113,6 +143,7 @@ FolderDialog::ask_archive(SDL_Window *window, const std::string &from, int asked
+ 	if (start())
+ 		SDL_ShowOpenFileDialog(answered, new Asked{ m_slot, asked }, window, ARCHIVES, 1, start_at(from), false);
+ }
++#endif
+ 
+ bool
+ FolderDialog::open() const
+diff --git a/src/odin/host/ui/menu_bar.cpp b/src/odin/host/ui/menu_bar.cpp
+index 0282be6..b7307d2 100644
+--- a/src/odin/host/ui/menu_bar.cpp
++++ b/src/odin/host/ui/menu_bar.cpp
+@@ -45,6 +45,7 @@
+ #pragma GCC diagnostic pop
+ #include "odin/machine/chips/card_reader.hpp"
+ #include "odin/host/ui/menu_kit.hpp"
++#include "odin/host/input/touch_pad.hpp"
+ #include "odin/host/app/version.hpp"
+ #include "odin/machine/cabinet/netbd_ring.hpp"
+ 
+@@ -129,6 +130,7 @@ Menu::build_bar(BarState &state)
+ {
+ 	begin_frame(state.theme);
+ 	bar(state);
++	touch_pad_draw();
+ 	ImGui::Render();
+ }
+ 
+@@ -156,6 +158,7 @@ Menu::build_note(BarState &state)
+ 	ImGui::NewFrame();
+ 	close_bar_menus();
+ 	note(state, MenuKit(*m_palette, m_scale));
++	touch_pad_draw();
+ 	ImGui::Render();
+ }
+ 
+diff --git a/src/odin/host/ui/system_fonts.cpp b/src/odin/host/ui/system_fonts.cpp
+index d6b727c..f2e748b 100644
+--- a/src/odin/host/ui/system_fonts.cpp
++++ b/src/odin/host/ui/system_fonts.cpp
+@@ -70,7 +70,7 @@ const std::vector<std::vector<const char *>> WANTED = {
+  * Chinese, Japanese and Korean (Noto Sans CJK, else Droid Sans Fallback,
+  * else WenQuanYi); Thai; Hindi */
+ const std::vector<std::vector<const char *>> WANTED = {
+-	{ "DejaVuSans.ttf", "NotoSans-Regular.ttf" },
++	{ "DejaVuSans.ttf", "NotoSans-Regular.ttf", "Roboto-Regular.ttf" },
+ 	{ "NotoSansCJK-Regular.ttc", "DroidSansFallbackFull.ttf", "DroidSansFallback.ttf", "wqy-microhei.ttc",
+ 	  "wqy-zenhei.ttc" },
+ 	{ "NotoSansThai-Regular.ttf" }, { "NotoSansDevanagari-Regular.ttf" },
+@@ -95,6 +95,9 @@ find_files()
+ 		folders.push_back(std::string(home) + "/Library/Fonts");
+ 	folders.push_back("/Library/Fonts");
+ 	folders.push_back("/System/Library/Fonts");
++#elif defined(__ANDROID__)
++	folders.push_back("/system/fonts");
++	folders.push_back("/product/fonts");
+ #else
+ 	const std::string home = env_text("HOME"), data = env_text("XDG_DATA_HOME");
+ 
+diff --git a/src/odin/host/video/display.cpp b/src/odin/host/video/display.cpp
+index f185cd7..58d7662 100644
+--- a/src/odin/host/video/display.cpp
++++ b/src/odin/host/video/display.cpp
+@@ -26,6 +26,7 @@
+  */
+ 
+ #include "odin/host/video/display.hpp"
++#include "odin/host/input/touch_pad.hpp"
+ 
+ #include <algorithm>
+ #include <atomic>
+@@ -689,7 +690,8 @@ Display::build_bar(BarState *bar)
+ 		m_menu->build_bar(*bar);
+ 		return true;
+ 	}
+-	if (bar->note.empty())
++	/* The gamepad of the touch screen is drawn over each frame */
++	if (bar->note.empty() && !touch_pad_wanted())
+ 		return false;
+ 	make_menu();
+ 	m_menu->build_note(*bar);
+diff --git a/src/odin/host/video/x11_window.cpp b/src/odin/host/video/x11_window.cpp
+index 42a24db..d7fcd6d 100644
+--- a/src/odin/host/video/x11_window.cpp
++++ b/src/odin/host/video/x11_window.cpp
+@@ -27,13 +27,13 @@
+ 
+ #include "odin/host/video/x11_window.hpp"
+ 
+-#if !defined(_WIN32) && !defined(__APPLE__)
++#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
+ #include <X11/Xlib.h>
+ #endif
+ 
+ namespace odin {
+ 
+-#if !defined(_WIN32) && !defined(__APPLE__)
++#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
+ 
+ /* As SDL sends it (SDL_x11window.c): _NET_WM_STATE, remove FULLSCREEN, to
+  * the root window */

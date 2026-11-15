@@ -1,0 +1,57 @@
+name: Odin Android APK
+
+on:
+  push:
+    branches: ['**']
+    paths: ['odin-android/**', '.github/workflows/odin-android.yml']
+  pull_request:
+    paths: ['odin-android/**', '.github/workflows/odin-android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: odin-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: odin-android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Tools (glslangValidator for the shaders)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q glslang-tools gawk
+      - name: Odin's sources, patched for Android
+        run: |
+          ./fetch-odin.sh
+          echo "ODIN_COMMIT=$(cat odin.version)" >> "$GITHUB_ENV"
+      - name: Build the APK
+        run: |
+          chmod +x gradlew
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          ./gradlew --no-daemon --stacktrace assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: odin-android-apk
+          path: odin-android/app/build/outputs/apk/release/*.apk
+      - name: Publish the APK as a direct download (release "odin-apk")
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk odin.apk
+          gh release delete odin-apk --yes --cleanup-tag || true
+          gh release create odin-apk odin.apk --target "$GITHUB_SHA" \
+            --title "Odin — APK Android" \
+            --notes "Odin (émulateur SEGA Hikaru / Gaelco ATV Track) pour Android ARM64, construit depuis Odin ${ODIN_COMMIT::7} et ${GITHUB_SHA::7}. Téléchargez odin.apk sur le téléphone, ouvrez-le et autorisez l'installation depuis cette source. Placez vos jeux dans le dossier Odin/roms du téléphone."
